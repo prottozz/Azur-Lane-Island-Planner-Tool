@@ -1,7 +1,7 @@
 import type { Building, GameData, ItemId, Priority, Qty, Recipe, State } from '../types';
 import { fillJob, idpPerHour, jobInputs, jobOutputs } from '../recipes';
 import { readyJobs } from '../actions';
-import { derivePipeline, sharedItems } from '../gamedata';
+import { sharedItems } from '../gamedata';
 import { expandDemand, type Expansion, type PlanStep } from './expand';
 
 export interface Suggestion { buildingId: string; slot: number; recipeId: string; runs: number; reason: string; missing: Qty[] }
@@ -140,20 +140,17 @@ function idleSlots(s: State, b: Building, now: Date): number[] {
   return out;
 }
 
-/** Sides to draw from for the k-th idle slot of a building, best first. */
-function sideOrder(gd: GameData, b: Building, priority: Priority, k: number): Side[] {
-  const p = derivePipeline(gd, b.id);
-  if (p !== 'both') return [p];
-  const foodFirst = priority === 'money' || (priority === 'balanced' && k % 2 === 0);
-  return foodFirst ? ['food', 'goods'] : ['goods', 'food'];
-}
+const servesSide = (b: Building, side: Side) => b.pipeline === side || b.pipeline === 'both';
+type IdleSlots = Map<string, number[]>;
 
-/** The building's step with the most remaining runs (ties by recipe id). */
-function nextStep(ctx: Ctx, side: Side, b: Building): PlanStep | null {
+/** The side's step with the most remaining runs (ties by recipe id) whose building serves the side and has an idle slot. */
+function nextStep(ctx: Ctx, side: Side, idle: IdleSlots): PlanStep | null {
   let best: PlanStep | null = null;
   for (const st of ctx.expansions[side].steps) {
     const left = ctx.remaining.get(st) ?? 0;
-    if (left <= 0 || ctx.gd.recipes[st.recipeId]?.buildingId !== b.id) continue;
+    const recipe = ctx.gd.recipes[st.recipeId];
+    const b = recipe && ctx.gd.buildings[recipe.buildingId];
+    if (left <= 0 || !b || recipe.maxRuns < 1 || !servesSide(b, side) || !idle.get(b.id)?.length) continue;
     const bestLeft = best ? ctx.remaining.get(best)! : 0;
     if (!best || left > bestLeft || (left === bestLeft && st.recipeId < best.recipeId)) best = st;
   }
@@ -211,6 +208,42 @@ function rankGoods(gd: GameData, budget: Budget): RankedGood[] {
     .map(x => ({ recipeId: x.recipe.id, idpPerHour: x.idp, feasibleRuns: budget.affordable('goods', x.recipe) }));
 }
 
+/**
+ * Global passes over needed steps, ordered by priority: money → all food steps then goods; idp → the reverse;
+ * balanced → one food assignment, one goods assignment, and so on. Each assignment takes the first idle slot
+ * of the step's building (removed from `idle`).
+ */
+function assignNeededSteps(ctx: Ctx, idle: IdleSlots, priority: Priority): Suggestion[] {
+  const out: Suggestion[] = [];
+  const assign = (side: Side): boolean => {
+    const st = nextStep(ctx, side, idle);
+    if (!st) return false;
+    const b = ctx.gd.buildings[ctx.gd.recipes[st.recipeId].buildingId];
+    out.push(suggestFromStep(ctx, side, b, idle.get(b.id)!.shift()!, st));
+    return true;
+  };
+  const order: Side[] = priority === 'idp' ? ['goods', 'food'] : ['food', 'goods'];
+  if (priority === 'balanced') {
+    for (let progressed = true; progressed;) progressed = order.map(assign).some(Boolean);
+  } else {
+    for (const side of order) while (assign(side));
+  }
+  return out;
+}
+
+/** Idle factory slots left after the needed steps get the best feasible IDP/h recipe. */
+function fillIdleFactories(ctx: Ctx, idle: IdleSlots, ranked: RankedGood[]): Suggestion[] {
+  const out: Suggestion[] = [];
+  for (const b of Object.values(ctx.gd.buildings)) {
+    if (!b.active || b.kind !== 'factory') continue;
+    for (const slot of idle.get(b.id) ?? []) {
+      const best = suggestBestGoods(ctx, ranked, b, slot);
+      if (best) out.push(best);
+    }
+  }
+  return out;
+}
+
 export function buildPlan(gd: GameData, s: State, now: Date): Plan {
   const priority = s.settings.priority;
   const free = freeStock(s, gd, now);
@@ -232,18 +265,9 @@ export function buildPlan(gd: GameData, s: State, now: Date): Plan {
     expansions, remaining, budget,
   };
 
-  const suggestions: Suggestion[] = [];
-  for (const b of Object.values(gd.buildings)) {
-    if (!b.active) continue;
-    idleSlots(s, b, now).forEach((slot, k) => {
-      for (const side of sideOrder(gd, b, priority, k)) {
-        const st = nextStep(ctx, side, b);
-        if (st) { suggestions.push(suggestFromStep(ctx, side, b, slot, st)); return; }
-      }
-      if (b.kind !== 'factory') return;
-      const best = suggestBestGoods(ctx, rankedGoods, b, slot);
-      if (best) suggestions.push(best);
-    });
-  }
+  const idle: IdleSlots = new Map(Object.values(gd.buildings).filter(b => b.active).map(b => [b.id, idleSlots(s, b, now)]));
+  const suggestions = [...assignNeededSteps(ctx, idle, priority), ...fillIdleFactories(ctx, idle, rankedGoods)];
+  const buildingOrder = Object.keys(gd.buildings);
+  suggestions.sort((a, b) => buildingOrder.indexOf(a.buildingId) - buildingOrder.indexOf(b.buildingId) || a.slot - b.slot);
   return { food: expansions.food, goods: expansions.goods, suggestions, rankedGoods };
 }

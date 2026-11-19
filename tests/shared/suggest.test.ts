@@ -3,12 +3,12 @@ import {
   cafeDemand, reservedDemand, goodsDemand, freeStock, allocate, buildPlan,
 } from '../../src/shared/planner/suggest';
 import { emptyState } from '../../src/shared/defaults';
-import type { Building, BuildingKind, GameData, Item, Priority, Recipe, State } from '../../src/shared/types';
+import type { Building, BuildingKind, GameData, Item, Pipeline, Priority, Recipe, State } from '../../src/shared/types';
 
 const item = (id: string, name: string, idp: number | null = null): Item =>
   ({ id, name, category: 'x', idp, cafeValue: null, season: 'permanent', active: true });
-const building = (id: string, name: string, kind: BuildingKind, slots: number): Building =>
-  ({ id, name, kind, pipeline: 'both', slots, season: 'permanent', active: true });
+const building = (id: string, name: string, kind: BuildingKind, pipeline: Pipeline, slots: number): Building =>
+  ({ id, name, kind, pipeline, slots, season: 'permanent', active: true });
 const recipe = (id: string, buildingId: string, inputs: [string, number][], outputs: [string, number][], extra: Partial<Recipe> = {}): Recipe =>
   ({ id, buildingId, inputs: inputs.map(([i, qty]) => ({ item: i, qty })), outputs: outputs.map(([i, qty]) => ({ item: i, qty })),
     bonus: [], maxRuns: 12, secondsPerRun: 600, stamina: 0, season: 'permanent', active: true, ...extra });
@@ -21,9 +21,9 @@ const fixture = (): GameData => ({
     linen: item('linen', 'Linen', 50), lavender: item('lavender', 'Lavender'), perfume: item('perfume', 'Perfume', 1000),
   },
   buildings: {
-    koi: building('koi', 'Golden Koi', 'kitchen', 1),
-    nursery: building('nursery', 'Nursery', 'nursery', 1),
-    factory: building('factory', 'Textile Mill', 'factory', 1),
+    koi: building('koi', 'Golden Koi', 'kitchen', 'food', 1),
+    nursery: building('nursery', 'Nursery', 'nursery', 'both', 1),
+    factory: building('factory', 'Textile Mill', 'factory', 'goods', 1),
   },
   recipes: {
     r_tofu: recipe('r_tofu', 'koi', [['soy', 15]], [['tofu', 1]], { maxRuns: 50 }),
@@ -167,10 +167,58 @@ describe('buildPlan', () => {
     }, 'balanced');
     const p = buildPlan(g, s, now);
     expect(p.suggestions.length).toBeGreaterThanOrEqual(4);
-    // balanced alternates food, goods, food… per idle slot, falling back to the other side when one has nothing left
-    expect(p.suggestions.filter(x => x.buildingId === 'nursery').map(x => [x.recipeId, x.runs]))
-      .toEqual([['r_straw', 2], ['r_flax', 1], ['r_flax', 3]]);
+    // balanced alternates globally: food (cake at Koi), goods (flax takes all 9 seeds), food (strawberries, short), goods (rest of flax)
+    expect(p.suggestions.filter(x => x.buildingId === 'nursery').map(x => [x.recipeId, x.runs, x.missing]))
+      .toEqual([['r_flax', 3, []], ['r_straw', 2, [{ item: 'seeds', qty: 6 }]], ['r_flax', 1, [{ item: 'seeds', qty: 3 }]]]);
     for (const x of p.suggestions) expect(x.reason.length).toBeGreaterThan(0);
     expect(buildPlan(g, s, now)).toEqual(p);
+  });
+
+  it('uses the stored building pipeline: a nursery stored as food never grows flax, even under idp', () => {
+    const g = fixture();
+    g.buildings.nursery.pipeline = 'food';
+    const s = state({ stock: { seeds: 3 }, cafePlans: [{ cafeId: 'cafe1', rankIndex: 0, dishes: ['cake'] }] }, 'idp');
+    const p = buildPlan(g, s, now);
+    expect(p.goods.steps.some(st => st.recipeId === 'r_flax')).toBe(true);
+    expect(p.suggestions.some(x => x.recipeId === 'r_flax')).toBe(false);
+    expect(p.suggestions.find(x => x.buildingId === 'nursery')).toMatchObject({ recipeId: 'r_straw', runs: 1, missing: [] });
+  });
+
+  it('priority decides which building gets stock that two buildings compete for', () => {
+    const g = fixture();
+    delete g.buildings.nursery;
+    g.buildings = {
+      orchard: building('orchard', 'Orchard', 'orchard', 'food', 1),
+      flaxField: building('flaxField', 'Flax Field', 'field', 'goods', 1),
+      ...g.buildings,
+    };
+    g.recipes.r_straw.buildingId = 'orchard';
+    g.recipes.r_flax.buildingId = 'flaxField';
+    const plan = (priority: Priority) => buildPlan(g, state({ stock: { seeds: 3 }, cafePlans: [{ cafeId: 'cafe1', rankIndex: 0, dishes: ['cake'] }] }, priority), now);
+    const at = (p: ReturnType<typeof buildPlan>, id: string) => p.suggestions.find(x => x.buildingId === id)!;
+
+    const money = plan('money');
+    expect(at(money, 'orchard')).toMatchObject({ recipeId: 'r_straw', runs: 1, missing: [] });
+    expect(at(money, 'flaxField')).toMatchObject({ recipeId: 'r_flax', missing: [{ item: 'seeds', qty: 18 }] });
+    const idp = plan('idp');
+    expect(at(idp, 'flaxField')).toMatchObject({ recipeId: 'r_flax', runs: 1, missing: [] });
+    expect(at(idp, 'orchard')).toMatchObject({ recipeId: 'r_straw', missing: [{ item: 'seeds', qty: 6 }] });
+  });
+
+  it('splits a truly shared item by priority through the requirement pass', () => {
+    // strawberry feeds both the café cake (kitchen) and jam (factory): food needs 12, goods 24, 20 in stock
+    const g = fixture();
+    g.items.jam = item('jam', 'Jam', 100);                                                         // 600 IDP/h beats linen
+    g.recipes.r_jam = recipe('r_jam', 'factory', [['strawberry', 2]], [['jam', 1]]);
+    const plan = (priority: Priority) =>
+      buildPlan(g, state({ stock: { strawberry: 20 }, cafePlans: [{ cafeId: 'cafe1', rankIndex: 0, dishes: ['cake'] }] }, priority), now);
+    const at = (p: ReturnType<typeof buildPlan>, id: string) => p.suggestions.find(x => x.buildingId === id)!;
+
+    const money = plan('money');   // food 12 / goods 8
+    expect(at(money, 'koi')).toMatchObject({ recipeId: 'r_cake', runs: 6, missing: [] });
+    expect(at(money, 'factory')).toMatchObject({ recipeId: 'r_jam', runs: 4 });
+    const idp = plan('idp');       // goods 20 / food 0
+    expect(at(idp, 'koi')).toMatchObject({ recipeId: 'r_cake', runs: 6, missing: [{ item: 'strawberry', qty: 12 }] });
+    expect(at(idp, 'factory')).toMatchObject({ recipeId: 'r_jam', runs: 10 });
   });
 });
