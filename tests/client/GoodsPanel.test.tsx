@@ -71,7 +71,7 @@ describe('GoodsPanel', () => {
     expect(rows[0][1]).toBe('Factory');
     expect(rows[0][2]).toBe('155.0');
     expect(rows[1][2]).toBe('100.0');
-    expect(rows[0][3]).toMatch(/runs/);
+    expect(rows[0][3]).toMatch(/^[1-9]\d* runs$/);
   });
 
   it('converting 2 Clocks raises earned by 620 and removes them from stock', () => {
@@ -126,8 +126,26 @@ describe('GoodsTab', () => {
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '1000' } });
     expect(holder.state.idp.target).toBe(1000);
     expect(screen.getByTestId('idp-progress').textContent).toContain('IDP: 620 / 1000');
-    expect(screen.getByLabelText('IDP progress')).toBeTruthy();
+    const bar = screen.getByLabelText('IDP progress') as HTMLProgressElement;
+    expect(bar.max).toBe(1000);
+    expect(bar.value).toBe(620);
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '' } });
     expect(holder.state.idp.target).toBeNull();
+  });
+
+  it('shows an alert when the target edit fails and clears it on the next success', () => {
+    const holder = makeHolder();
+    let fail = true;
+    const app: AppState = {
+      gd: holder.gd, state: holder.state, plan: buildPlan(holder.gd, holder.state, NOW), now: NOW, warnings: [],
+      apply: () => (fail ? 'cannot save target' : null),
+      applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    };
+    render(<AppStateContext.Provider value={app}><GoodsTab /></AppStateContext.Provider>);
+    fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '500' } });
+    expect(screen.getByRole('alert').textContent).toBe('cannot save target');
+    fail = false;
+    fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '600' } });
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

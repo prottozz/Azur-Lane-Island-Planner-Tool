@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BuildingBoard } from '../components/BuildingBoard';
 import { GoodsPanel } from '../components/GoodsPanel';
 import { Shortfalls } from '../components/Shortfalls';
@@ -6,12 +7,12 @@ import { useApp } from '../useAppState';
 export function GoodsTab() {
   const { state, plan, apply } = useApp();
   const { earned, target } = state.idp;
+  const [error, setError] = useState<string | null>(null);
 
   const setTarget = (raw: string) => {
-    if (raw.trim() === '') { apply(s => ({ ...s, idp: { ...s.idp, target: null } })); return; }
-    const n = Number(raw);
-    if (!Number.isInteger(n) || n < 0) return;
-    apply(s => ({ ...s, idp: { ...s.idp, target: n } }));
+    const n = raw.trim() === '' ? null : Number(raw);
+    if (n !== null && (!Number.isInteger(n) || n < 0)) return;
+    setError(apply(s => ({ ...s, idp: { ...s.idp, target: n } })));
   };
 
   return (
@@ -23,6 +24,7 @@ export function GoodsTab() {
             value={target ?? ''} onChange={e => setTarget(e.target.value)} />
         </label>
       </p>
+      {error && <p className="error" role="alert">{error}</p>}
       {target !== null && target > 0 && (
         <progress aria-label="IDP progress" max={target} value={Math.min(earned, target)} />
       )}
