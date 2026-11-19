@@ -1,0 +1,16 @@
+{
+  "101": { "id": 101, "name": "Field", "recipes": [
+    { "id": 10101, "stamina": 5, "item_name": "Wheat", "production_limit": 12, "cost": [{ "id": 1101, "amount": 1 }],
+      "produce": [{ "id": 1001, "amount": 4 }], "extra_produce": null, "base_time": "00:40:00", "needs_unlock": false } ],
+    "recipes_manual": [ { "id": 99999, "stamina": 1, "item_name": "Ignored", "production_limit": 1, "cost": [], "produce": [], "extra_produce": null, "base_time": "00:01:00", "needs_unlock": false } ] },
+  "102": { "id": 102, "name": "Ranch", "recipes": [
+    { "id": 10201, "stamina": 6, "item_name": "Egg", "production_limit": 6, "cost": [{ "id": 1001, "amount": 2 }],
+      "produce": [{ "id": 1003, "amount": 2 }], "extra_produce": { "id": 1003, "amount": 1, "every": 3 }, "base_time": "01:30:00", "needs_unlock": false } ] },
+  "601": { "id": 601, "name": "Tofu Workshop", "recipes": [
+    { "id": 60101, "stamina": 8, "item_name": "Tofu", "production_limit": 4, "cost": [{ "id": 1002, "amount": 3 }],
+      "produce": [{ "id": 2001, "amount": 1 }], "extra_produce": null, "base_time": "00:30:00", "needs_unlock": false } ] },
+  "703": { "id": 703, "name": "Clock Factory", "recipes": [
+    { "id": 70301, "stamina": 10, "item_name": "Clock", "production_limit": 2, "cost": [{ "id": 1004, "amount": 5 }],
+      "produce": [{ "id": 3001, "amount": 1 }], "extra_produce": null, "base_time": "02:00:00", "needs_unlock": true } ] },
+  "702": { "id": 702, "name": "Empty Place", "recipes": [] }
+}
