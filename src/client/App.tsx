@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Header } from './components/Header';
+import { CafeTab } from './tabs/CafeTab';
 
 const TABS = [
   { id: 'cafe', label: 'Café / Money' },
@@ -36,7 +37,7 @@ export function App() {
       </nav>
       <main className="tab-body">
         <h2>{label}</h2>
-        <p className="muted">Nothing here yet.</p>
+        {tab === 'cafe' ? <CafeTab /> : <p className="muted">Nothing here yet.</p>}
       </main>
     </div>
   );
