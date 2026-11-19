@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Header } from './components/Header';
 import { CafeTab } from './tabs/CafeTab';
 import { GoodsTab } from './tabs/GoodsTab';
+import { StockTab } from './tabs/StockTab';
 
 const TABS = [
   { id: 'cafe', label: 'Café / Money' },
@@ -38,7 +39,7 @@ export function App() {
       </nav>
       <main className="tab-body">
         <h2>{label}</h2>
-        {tab === 'cafe' ? <CafeTab /> : tab === 'goods' ? <GoodsTab /> : <p className="muted">Nothing here yet.</p>}
+        {tab === 'cafe' ? <CafeTab /> : tab === 'goods' ? <GoodsTab /> : tab === 'stock' ? <StockTab /> : <p className="muted">Nothing here yet.</p>}
       </main>
     </div>
   );
