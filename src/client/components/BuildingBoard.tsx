@@ -63,9 +63,9 @@ export function BuildingBoard({ pipeline }: { pipeline: 'food' | 'goods' }) {
                     className="primary"
                     disabled={sug.missing.length > 0}
                     title={sug.missing.length > 0 ? `Missing: ${sug.missing.map(q => `${name(q.item)} ×${q.qty}`).join(', ')}` : undefined}
-                    onClick={() => run((s, g) => startJob(s, g, {
+                    onClick={() => { setOpenSlot(null); run((s, g) => startJob(s, g, {
                       buildingId: b.id, slot, recipeId: sug.recipeId, runs: sug.runs, now: new Date(),
-                    }))}
+                    })); }}
                   >Start</button>
                 </>
               ) : <span className="muted">No suggestion</span>}

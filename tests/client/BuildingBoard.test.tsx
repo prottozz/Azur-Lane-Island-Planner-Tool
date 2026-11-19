@@ -49,16 +49,12 @@ function Harness({ holder, pipeline }: { holder: Holder; pipeline: 'food' | 'goo
   return <AppStateContext.Provider value={app}><BuildingBoard pipeline={pipeline} /></AppStateContext.Provider>;
 }
 
-function Wrap({ holder, pipeline = 'food' }: { holder: Holder; pipeline?: 'food' | 'goods' }) {
-  return <Harness holder={holder} pipeline={pipeline} />;
-}
-
 afterEach(cleanup);
 
 describe('BuildingBoard', () => {
   it('lists only buildings of the pipeline', () => {
     const holder = makeHolder({ seed: 108 });
-    render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     expect(screen.getByText('Wheat Field')).toBeTruthy();
     expect(screen.queryByText('Factory')).toBeNull();
   });
@@ -67,25 +63,22 @@ describe('BuildingBoard', () => {
     const holder = makeHolder({ seed: 108 });
     const sug = buildPlan(holder.gd, holder.state, NOW).suggestions.find(x => x.buildingId === 'field' && x.slot === 0);
     expect(sug).toBeTruthy();
-    const view = render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     expect(screen.getAllByText(sug!.reason).length).toBeGreaterThan(0);
     const row = screen.getByTestId('slot-field-0');
     fireEvent.click(within(row).getByRole('button', { name: 'Start' }));
     expect(holder.state.jobs).toHaveLength(1);
     expect(holder.state.jobs[0]).toMatchObject({ buildingId: 'field', slot: 0, recipeId: 'wheat', runs: sug!.runs });
-    view.unmount();
   });
 
   it('disables Start and lists missing items when stock is short', () => {
-    const holder = makeHolder({ seed: 0 });
-    render(<Wrap holder={holder} />);
-    const start = within(screen.getByTestId('slot-field-0')).queryByRole('button', { name: 'Start' }) as HTMLButtonElement | null;
-    if (start) {
-      expect(start.disabled).toBe(true);
-      expect(start.title).toMatch(/Wheat Seeds ×\d+/);
-    } else {
-      expect(within(screen.getByTestId('slot-field-0')).getByText('No suggestion')).toBeTruthy();
-    }
+    const holder = makeHolder({ seed: 5 });
+    const sug = buildPlan(holder.gd, holder.state, NOW).suggestions.find(x => x.buildingId === 'field' && x.slot === 0);
+    expect(sug?.missing.length).toBeGreaterThan(0);
+    render(<Harness holder={holder} pipeline="food" />);
+    const start = within(screen.getByTestId('slot-field-0')).getByRole('button', { name: 'Start' }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    expect(start.title).toMatch(/Wheat Seeds ×\d+/);
   });
 
   it('running job shows Finish; one click adds the outputs', () => {
@@ -93,7 +86,7 @@ describe('BuildingBoard', () => {
       id: 'j1', buildingId: 'field', slot: 0, recipeId: 'wheat', runs: 12,
       startedAt: NOW.toISOString(), endsAt: new Date(NOW.getTime() + 3600_000).toISOString(),
     }]);
-    render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     const row = screen.getByTestId('slot-field-0');
     expect(within(row).getByText('12/12')).toBeTruthy();
     expect(within(row).getByText('1:00:00')).toBeTruthy();
@@ -102,15 +95,17 @@ describe('BuildingBoard', () => {
     expect(holder.state.stock.wheat).toBe(120);
   });
 
-  it('ready job shows Ready and Finish', () => {
-    const holder = makeHolder({}, [{
-      id: 'j1', buildingId: 'field', slot: 0, recipeId: 'wheat', runs: 12,
+  it('ready slot shows Ready, Finish and the next suggestion', () => {
+    const holder = makeHolder({ seed: 108 }, [{
+      id: 'j1', buildingId: 'field', slot: 0, recipeId: 'wheat', runs: 1,
       startedAt: NOW.toISOString(), endsAt: new Date(NOW.getTime() - 1000).toISOString(),
     }]);
-    render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     const row = screen.getByTestId('slot-field-0');
     expect(within(row).getByText('Ready')).toBeTruthy();
     expect(within(row).getByRole('button', { name: 'Finish' })).toBeTruthy();
+    expect(within(row).getByText(/Next:/)).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Start' })).toBeNull();
   });
 
   it('Cancel on a running job refunds inputs after confirm', () => {
@@ -119,7 +114,7 @@ describe('BuildingBoard', () => {
       startedAt: NOW.toISOString(), endsAt: new Date(NOW.getTime() + 3600_000).toISOString(),
     }]);
     vi.stubGlobal('confirm', () => true);
-    render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     fireEvent.click(within(screen.getByTestId('slot-field-0')).getByRole('button', { name: 'Cancel' }));
     vi.unstubAllGlobals();
     expect(holder.state.jobs).toHaveLength(0);
@@ -127,10 +122,25 @@ describe('BuildingBoard', () => {
   });
 });
 
+describe('Cancel declined', () => {
+  it('keeps the job and refunds nothing when confirm returns false', () => {
+    const holder = makeHolder({}, [{
+      id: 'j1', buildingId: 'field', slot: 0, recipeId: 'wheat', runs: 12,
+      startedAt: NOW.toISOString(), endsAt: new Date(NOW.getTime() + 3600_000).toISOString(),
+    }]);
+    vi.stubGlobal('confirm', () => false);
+    render(<Harness holder={holder} pipeline="food" />);
+    fireEvent.click(within(screen.getByTestId('slot-field-0')).getByRole('button', { name: 'Cancel' }));
+    vi.unstubAllGlobals();
+    expect(holder.state.jobs).toHaveLength(1);
+    expect(holder.state.stock.seed ?? 0).toBe(0);
+  });
+});
+
 describe('JobDialog', () => {
   function open() {
     const holder = makeHolder({ seed: 108 });
-    render(<Wrap holder={holder} />);
+    render(<Harness holder={holder} pipeline="food" />);
     fireEvent.click(within(screen.getByTestId('slot-field-1')).getByRole('button', { name: 'Other…' }));
     return holder;
   }
@@ -161,5 +171,14 @@ describe('JobDialog', () => {
     open();
     fireEvent.change(screen.getByLabelText('Runs'), { target: { value: '99' } });
     expect((screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows the apply error with the missing list inline', () => {
+    const holder = makeHolder({ seed: 10 });
+    render(<Harness holder={holder} pipeline="food" />);
+    fireEvent.click(within(screen.getByTestId('slot-field-1')).getByRole('button', { name: 'Other…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/Not enough stock/);
+    expect(holder.state.jobs).toHaveLength(0);
   });
 });
