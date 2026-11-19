@@ -1,4 +1,5 @@
 import type { CafeRun, GameData, ItemId, Job, Qty, Result, State } from './types';
+import { newId } from './ids';
 import { jobInputs, jobOutputs, jobSeconds } from './recipes';
 import { lastResetAt, lastWeeklyResetAt, localDay } from './time';
 
@@ -6,6 +7,8 @@ const err = (error: string, missing?: Qty[]): { ok: false; error: string; missin
   missing ? { ok: false, error, missing } : { ok: false, error };
 const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 const isNonNegInt = (n: number) => Number.isInteger(n) && n >= 0;
+/** Game day: the local day of the most recent daily reset. */
+const gameDay = (s: State, now: Date) => localDay(lastResetAt(now, s.settings.resetTime));
 const SPAWN_DELAY_MS = 3 * 3600 * 1000;
 
 function mergeQty(list: Qty[]): Qty[] {
@@ -56,7 +59,7 @@ export function startJob(
 
   const seconds = a.durationSec ?? jobSeconds(recipe, a.runs);
   const job: Job = {
-    id: crypto.randomUUID(), buildingId: building.id, slot: a.slot, recipeId: recipe.id, runs: a.runs,
+    id: newId(), buildingId: building.id, slot: a.slot, recipeId: recipe.id, runs: a.runs,
     startedAt: a.now.toISOString(), endsAt: new Date(a.now.getTime() + seconds * 1000).toISOString(),
   };
   return ok({ ...s, stock: withStock(s.stock, inputs, -1), jobs: [...s.jobs, job] });
@@ -95,14 +98,14 @@ export function startCafeRun(s: State, gd: GameData, a: { cafeId: string; dishes
   const cafe = gd.cafes[a.cafeId];
   if (!cafe) return err(`Unknown café "${a.cafeId}"`);
   if (!validQtys(a.dishes)) return err('Dish quantities must be whole numbers, zero or more');
-  const date = localDay(a.now);
+  const date = gameDay(s, a.now);
   if (s.cafeRuns.some(r => r.cafeId === cafe.id && r.date === date)) {
     return err(`${cafe.name} already has a run for ${date}`);
   }
   const missing = shortfall(s.stock, a.dishes);
   if (missing.length) return err('Not enough dishes in stock', missing);
   const run: CafeRun = {
-    id: crypto.randomUUID(), date, cafeId: cafe.id, dishes: mergeQty(a.dishes), status: 'running',
+    id: newId(), date, cafeId: cafe.id, dishes: mergeQty(a.dishes), status: 'running',
     startedAt: a.now.toISOString(), leftovers: [], income: null,
   };
   return ok({ ...s, stock: withStock(s.stock, a.dishes, -1), cafeRuns: [...s.cafeRuns, run] });
@@ -140,13 +143,13 @@ export function convertToIdp(s: State, gd: GameData, items: Qty[]): Result<State
 }
 
 export function spawnsAvailable(s: State, gd: GameData, now: Date): boolean {
-  if (s.spawnsCollectedOn === localDay(now)) return false;
+  if (s.spawnsCollectedOn === gameDay(s, now)) return false;
   if (now.getTime() < lastResetAt(now, s.settings.resetTime).getTime() + SPAWN_DELAY_MS) return false;
   return Object.values(gd.spawns).some(sp => sp.active);
 }
 
 export function collectSpawns(s: State, _gd: GameData, quantities: Qty[], now: Date): State {
-  return { ...addStock(s, quantities), spawnsCollectedOn: localDay(now) };
+  return { ...addStock(s, quantities), spawnsCollectedOn: gameDay(s, now) };
 }
 
 export function applyResets(s: State, now: Date): State {

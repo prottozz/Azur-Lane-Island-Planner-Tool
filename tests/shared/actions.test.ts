@@ -166,6 +166,23 @@ describe('spawns', () => {
   });
 });
 
+describe('game day with a 04:00 reset', () => {
+  const s4 = (): State => { const s = base(); return { ...s, stock: { '3011': 10 }, settings: { ...s.settings, resetTime: '04:00' } }; };
+  it('spawns stay collected until the next reset + 3h', () => {
+    const c = collectSpawns(s4(), gd, [], new Date(2026, 10, 19, 10, 0));
+    expect(c.spawnsCollectedOn).toBe('2026-11-19');
+    expect(spawnsAvailable(c, gd, new Date(2026, 10, 20, 2, 0))).toBe(false);
+    expect(spawnsAvailable(c, gd, new Date(2026, 10, 20, 7, 0))).toBe(true);
+  });
+  it('cafe runs are one per game day', () => {
+    const dishes = [{ item: '3011', qty: 1 }];
+    const n = must(startCafeRun(s4(), gd, { cafeId: 'cafe1', dishes, now: new Date(2026, 10, 19, 23, 0) }));
+    expect(n.cafeRuns[0].date).toBe('2026-11-19');
+    expect(startCafeRun(n, gd, { cafeId: 'cafe1', dishes, now: new Date(2026, 10, 20, 2, 0) }).ok).toBe(false);
+    expect(startCafeRun(n, gd, { cafeId: 'cafe1', dishes, now: new Date(2026, 10, 20, 5, 0) }).ok).toBe(true);
+  });
+});
+
 describe('applyResets', () => {
   it('zeroes counters when the recorded reset is older', () => {
     const s = base();
