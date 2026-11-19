@@ -1,3 +1,10 @@
 import { createRoot } from 'react-dom/client';
+import { App } from './App';
+import { AppStateProvider } from './useAppState';
+import './styles.css';
 
-createRoot(document.getElementById('root')!).render(<h1>Island Planner</h1>);
+createRoot(document.getElementById('root')!).render(
+  <AppStateProvider>
+    <App />
+  </AppStateProvider>,
+);
