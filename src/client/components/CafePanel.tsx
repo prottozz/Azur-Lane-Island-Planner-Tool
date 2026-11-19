@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { finishCafeRun, startCafeRun } from '../../shared/actions';
-import { lastResetAt, localDay } from '../../shared/time';
 import type { Cafe, CafePlan, CafeRun, Qty } from '../../shared/types';
+import { runningRun, startedAtLabel, todaysRun } from '../cafeRuns';
 import { useApp } from '../useAppState';
 
 function FinishForm({ run, cafeName }: { run: CafeRun; cafeName: string }) {
@@ -75,11 +75,11 @@ function CafeCard({ cafe }: { cafe: Cafe }) {
   const income = rows.reduce((n, r) => n + r.value, 0);
   const missing = rows.filter(r => r.need > 0);
 
-  const gameDay = localDay(lastResetAt(now, state.settings.resetTime));
-  const todays = state.cafeRuns.find(r => r.cafeId === cafe.id && r.date === gameDay);
+  const todays = todaysRun(state, cafe.id, now);
+  const running = runningRun(state, cafe.id);
 
   const start = () => setError(apply((s, g) => startCafeRun(s, g, {
-    cafeId: cafe.id, dishes: rows.map(r => ({ item: r.item, qty: capacity })), now: new Date(),
+    cafeId: cafe.id, dishes: rows.map(r => ({ item: r.item, qty: capacity })), now,
   })));
 
   return (
@@ -114,18 +114,20 @@ function CafeCard({ cafe }: { cafe: Cafe }) {
       </ul>
       <p data-testid="est-income">Est. income: {income}</p>
       {error && <p className="error" role="alert">{error}</p>}
-      <div>
-        <button className="primary" disabled={rows.length === 0 || missing.length > 0} onClick={start}>Start run</button>
-        {missing.length > 0 && (
-          <span className="muted" data-testid="missing">
-            {' '}Missing: {missing.map(r => `${name(r.item)} ×${r.need}`).join(', ')}
-          </span>
-        )}
-      </div>
-      {todays?.status === 'running' && (
+      {!todays && (
+        <div>
+          <button className="primary" disabled={rows.length === 0 || missing.length > 0} onClick={start}>Start run</button>
+          {missing.length > 0 && (
+            <span className="muted" data-testid="missing">
+              {' '}Missing: {missing.map(r => `${name(r.item)} ×${r.need}`).join(', ')}
+            </span>
+          )}
+        </div>
+      )}
+      {running && (
         <>
-          <p>Running since {new Date(todays.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</p>
-          <FinishForm run={todays} cafeName={cafe.name} />
+          <p>Running since {startedAtLabel(running)}</p>
+          <FinishForm run={running} cafeName={cafe.name} />
         </>
       )}
       {todays?.status === 'done' && (

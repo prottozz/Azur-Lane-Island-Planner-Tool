@@ -1,5 +1,5 @@
 import { bumpRequests } from '../../shared/actions';
-import { lastResetAt, localDay } from '../../shared/time';
+import { runningRun, startedAtLabel, todaysRun } from '../cafeRuns';
 import { BuildingBoard } from '../components/BuildingBoard';
 import { CafePanel } from '../components/CafePanel';
 import { Shortfalls } from '../components/Shortfalls';
@@ -9,13 +9,11 @@ export function CafeTab() {
   const { gd, state, plan, now, apply } = useApp();
   const r = state.requests;
 
-  const gameDay = localDay(lastResetAt(now, state.settings.resetTime));
   const cafes = Object.values(gd.cafes).filter(c => c.active);
   const statusOf = (cafeId: string) => {
-    const run = state.cafeRuns.find(x => x.cafeId === cafeId && x.date === gameDay);
-    if (!run) return 'not started';
-    if (run.status === 'done') return 'done';
-    return `running since ${new Date(run.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+    const running = runningRun(state, cafeId);
+    if (running) return `running since ${startedAtLabel(running)}`;
+    return todaysRun(state, cafeId, now)?.status === 'done' ? 'done' : 'not started';
   };
   const runSummary = cafes.length === 1
     ? statusOf(cafes[0].id)

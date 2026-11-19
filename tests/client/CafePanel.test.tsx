@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { CafePanel } from '../../src/client/components/CafePanel';
 import { Shortfalls } from '../../src/client/components/Shortfalls';
 import { CafeTab } from '../../src/client/tabs/CafeTab';
@@ -61,9 +61,7 @@ function Harness({ holder, children }: { holder: Holder; children: React.ReactNo
   return <AppStateContext.Provider value={app}>{children}</AppStateContext.Provider>;
 }
 
-// Actions stamp runs with the real clock; pin it to the harness's NOW.
-beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(cleanup);
 
 const plan3 = [{ cafeId: 'cafe', rankIndex: 0, dishes: ['tofu', 'bread', 'milk'] }];
 
@@ -113,20 +111,38 @@ describe('CafePanel', () => {
     expect(screen.getByTestId('missing').textContent).toMatch(/Tofu ×6/);
   });
 
-  it('Start run deducts dishes; a second start the same day shows the error', () => {
+  it('Start run deducts dishes and then hides Start', () => {
     const holder = makeHolder({ cafePlans: plan3, stock: { tofu: 25, bread: 10, milk: 10 } });
     render(<Harness holder={holder}><CafePanel /></Harness>);
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
     expect(holder.state.stock).toMatchObject({ tofu: 15, bread: 0, milk: 0 });
     expect(holder.state.cafeRuns).toHaveLength(1);
     expect(holder.state.cafeRuns[0].dishes).toContainEqual({ item: 'tofu', qty: 10 });
+    expect(holder.state.cafeRuns[0].startedAt).toBe(NOW.toISOString());
     expect(screen.getByText(/Running since/)).toBeTruthy();
-    // top up so the button is enabled, then try again
-    holder.state = { ...holder.state, stock: { tofu: 15, bread: 10, milk: 10 } };
-    fireEvent.change(screen.getByLabelText('Rank'), { target: { value: '0' } });
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
+    expect(screen.queryByTestId('missing')).toBeNull();
+  });
+
+  it('after Finish the day stays blocked: Done is shown and Start stays hidden', () => {
+    const holder = makeHolder({ cafePlans: plan3, stock: { tofu: 10, bread: 10, milk: 10 } });
+    render(<Harness holder={holder}><CafePanel /></Harness>);
     fireEvent.click(screen.getByRole('button', { name: 'Start run' }));
-    expect(screen.getByRole('alert').textContent).toMatch(/already has a run/);
-    expect(holder.state.cafeRuns).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+    expect(screen.getByText(/Done/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Start run' })).toBeNull();
+  });
+
+  it('a running run from the previous game day still shows Finish and can be finished', () => {
+    const run = { id: 'old', date: '2025-12-31', cafeId: 'cafe', dishes: [{ item: 'tofu', qty: 10 }], status: 'running' as const,
+      startedAt: new Date(2025, 11, 31, 23, 0).toISOString(), leftovers: [], income: null };
+    const holder = makeHolder({ cafePlans: plan3, cafeRuns: [run] });
+    render(<Harness holder={holder}><CafePanel /></Harness>);
+    expect(screen.getByText(/Running since/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Leftover Tofu'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+    expect(holder.state.cafeRuns[0].status).toBe('done');
+    expect(holder.state.stock.tofu).toBe(2);
   });
 
   it('Finish returns leftovers and logs income', () => {
