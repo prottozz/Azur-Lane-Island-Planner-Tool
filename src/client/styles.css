@@ -48,3 +48,12 @@ button.small { padding: 2px 8px; font-size: 0.85em; }
 .job-dialog-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 4px 0; }
 .error { color: #8a1c1c; margin: 4px 0; }
 tr.short td { background: #fdecec; }
+
+.data-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.subtabs { display: flex; gap: 4px; margin: 8px 0; }
+.data-table td { vertical-align: top; }
+.chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid #98a2b3; border-radius: 10px; background: #f2f4f7; }
+.chip-remove { padding: 0 4px; border: none; background: none; }
+.chip-add, .rank-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; }
+.paste-import textarea { max-width: 100%; }
