@@ -29,7 +29,9 @@ export async function runImport(opts: ImportOptions): Promise<string> {
     } else {
       const res = await fetch(`${BASE_URL}/${name}.json?v=${VERSION}`);
       if (!res.ok) throw new Error(`Fetching ${name}.json failed: HTTP ${res.status}`);
-      fs.writeFileSync(file, await res.text());
+      const body = await res.text();
+      try { JSON.parse(body); } catch { throw new Error(`${name}.json from the site is not valid JSON`); }
+      fs.writeFileSync(file, body);
     }
     src[name] = JSON.parse(fs.readFileSync(file, 'utf8'));
   }

@@ -105,6 +105,44 @@ describe('mapFish', () => {
   });
 });
 
+const realHeaders = {
+  ICON: '', 'FISH NAME': 'Crayfish', CATEGORY: 'Freshwater', 'WHERE TO FISH?': 'River', 'QTE (Nb type / Nb min)': '3 / 1', 'QTE SPEED': 'Slow',
+  'LVL ROD': 2, CORN: 0, WORM: 1, SHRIMP: 0, OCTO: 0, 'LURE ++': 'Worm', 'FRY PRICE': 200, 'TIME TO PRODUCE (no speed up)': 0.0946990741,
+  'PROD / TURN': 8, 'MAX TURNS': 5, 'PROD MAX TURN': 40, 'MEAT / FISH': '(NA)', 'IDP / FISH': 12, 'USED IN?': 'Soup',
+};
+
+describe('real sheet headers and strict columns', () => {
+  const roundTrip = (rows: Record<string, unknown>[]) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fish-'));
+    const file = path.join(dir, 'fish.xlsx');
+    writeFishXlsx(file, rows);
+    return mapFish(readFishSheet(file));
+  };
+
+  it('reads TIME TO PRODUCE (no speed up) by prefix', () => {
+    const out = roundTrip([realHeaders]);
+    expect(out.recipes['fish-crayfish'].secondsPerRun).toBe(8182);
+    expect(out.recipes['fish-crayfish'].outputs[0].qty).toBe(8);
+    expect(out.shop[0].price).toBe(200);
+    expect(out.items['fish-crayfish'].fishing?.idpNote).toBe('12');
+  });
+
+  it('throws column not found for a missing required column', () => {
+    const { 'MAX TURNS': _drop, ...rest } = realHeaders;
+    expect(() => roundTrip([rest])).toThrow('column not found: MAX TURNS');
+  });
+
+  it.each(['FRY PRICE', 'PROD / TURN', 'MAX TURNS'])('throws with the fish name on bad %s', col => {
+    expect(() => roundTrip([{ ...realHeaders, [col]: '' }])).toThrow(/Crayfish.*must be a number above 0/);
+    expect(() => roundTrip([{ ...realHeaders, [col]: 0 }])).toThrow(/Crayfish/);
+    expect(() => roundTrip([{ ...realHeaders, [col]: 'abc' }])).toThrow(/Crayfish/);
+  });
+
+  it('throws on duplicate slugs', () => {
+    expect(() => roundTrip([realHeaders, { ...realHeaders, 'FISH NAME': 'CRAYFISH!' }])).toThrow('duplicate fish slug: crayfish');
+  });
+});
+
 describe('readFishSheet', () => {
   it('reads EN_INFO and stops at the first row with an empty FISH NAME', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fish-'));

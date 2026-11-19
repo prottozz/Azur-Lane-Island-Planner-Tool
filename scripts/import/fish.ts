@@ -34,26 +34,53 @@ function seconds(name: string, v: unknown): number {
   throw new Error(`Fish "${name}": can't read TIME TO PRODUCE "${text(v)}"`);
 }
 
+function positive(name: string, column: string, v: unknown): number {
+  const n = typeof v === 'number' ? v : text(v) === '' ? NaN : Number(text(v));
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`Fish "${name}": ${column} must be a number above 0, got "${text(v)}"`);
+  return n;
+}
+
+/** Find a column by exact header, else by header prefix (e.g. "TIME TO PRODUCE (no speed up)"). */
+function findColumn(headers: string[], wanted: string): string | undefined {
+  return headers.find(h => h === wanted) ?? headers.find(h => h.startsWith(wanted));
+}
+
 export function mapFish(rows: Record<string, unknown>[]): Pick<GameData, 'items' | 'recipes' | 'shop'> & { building: Building } {
   const out: Pick<GameData, 'items' | 'recipes' | 'shop'> = { items: {}, recipes: {}, shop: [] };
+  const headers = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  const col = (name: string, required: boolean): string => {
+    const found = findColumn(headers, name);
+    if (found === undefined && required && rows.length) throw new Error(`column not found: ${name}`);
+    return found ?? name;
+  };
+  const c = {
+    name: col('FISH NAME', true), price: col('FRY PRICE', true), time: col('TIME TO PRODUCE', true),
+    prod: col('PROD / TURN', true), turns: col('MAX TURNS', true),
+    where: col('WHERE TO FISH?', false), lure: col('LURE ++', false), rod: col('LVL ROD', false),
+    qte: col('QTE (Nb type / Nb min)', false), used: col('USED IN?', false), idp: col('IDP / FISH', false),
+  };
+  const slugs = new Set<string>();
   for (const row of rows) {
-    const name = text(row['FISH NAME']);
+    const name = text(row[c.name]);
     const s = slug(name);
+    if (slugs.has(s)) throw new Error(`duplicate fish slug: ${s}`);
+    slugs.add(s);
     const fishId = `fish-${s}`;
     const fryId = `fry-${s}`;
     const fish: Item = {
       id: fishId, name, category: 'Fish', idp: null, cafeValue: null, season: 'permanent', active: true,
       fishing: {
-        location: text(row['WHERE TO FISH?']), bait: text(row['LURE ++']), rodLevel: Number(row['LVL ROD']) || 0,
-        qte: text(row['QTE (Nb type / Nb min)']), usedIn: text(row['USED IN?']), idpNote: text(row['IDP / FISH']),
+        location: text(row[c.where]), bait: text(row[c.lure]), rodLevel: Number(row[c.rod]) || 0,
+        qte: text(row[c.qte]), usedIn: text(row[c.used]), idpNote: text(row[c.idp]),
       },
     };
     out.items[fishId] = fish;
     out.items[fryId] = { id: fryId, name: `${name} Fry`, category: 'Fry', idp: null, cafeValue: null, season: 'permanent', active: true };
-    out.shop.push({ item: fryId, price: Number(row['FRY PRICE']) || 0, currency: 'money', shop: 'Seeds/Hatchery' });
+    out.shop.push({ item: fryId, price: positive(name, 'FRY PRICE', row[c.price]), currency: 'money', shop: 'Seeds/Hatchery' });
     const recipe: Recipe = {
-      id: `fish-${s}`, buildingId: 'hatchery', inputs: [{ item: fryId, qty: 1 }], outputs: [{ item: fishId, qty: Number(row['PROD / TURN']) || 0 }],
-      bonus: [], maxRuns: Number(row['MAX TURNS']) || 0, secondsPerRun: seconds(name, row['TIME TO PRODUCE']), stamina: 0, season: 'permanent', active: true,
+      id: `fish-${s}`, buildingId: 'hatchery', inputs: [{ item: fryId, qty: 1 }],
+      outputs: [{ item: fishId, qty: positive(name, 'PROD / TURN', row[c.prod]) }],
+      bonus: [], maxRuns: positive(name, 'MAX TURNS', row[c.turns]), secondsPerRun: seconds(name, row[c.time]), stamina: 0, season: 'permanent', active: true,
     };
     out.recipes[recipe.id] = recipe;
   }
