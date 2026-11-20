@@ -1,0 +1,4 @@
+{
+  "1": { "id": 1, "name": "Tofu Cafe", "place": 601, "sellable": [2001],
+    "ranks": [ { "name": "Rank 1", "dish_slots": 2, "dish_capacity": 30 }, { "name": "Rank 2", "dish_slots": 3, "dish_capacity": 40 } ] }
+}

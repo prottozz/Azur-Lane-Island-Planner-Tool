@@ -1,0 +1,12 @@
+services:
+  island-planner:
+    image: ghcr.io/prottozz/azur-lane-island-planner-tool:latest
+    container_name: island-planner
+    restart: unless-stopped
+    ports: ["4747:4747"]
+    environment:
+      TZ: Europe/Moscow
+      # BASIC_AUTH: "user:change-me"
+    volumes: ["island-data:/data"]
+volumes:
+  island-data:

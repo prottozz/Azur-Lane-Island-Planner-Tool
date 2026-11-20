@@ -1,0 +1,8 @@
+{
+  "10109": { "id": 10109, "name": "Seeds", "sub_shops": [
+    { "name": "General", "goods": [ { "id": 1, "name": "Wheat Seeds", "cost": { "id": 1, "amount": 200, "name": "Coins" }, "gains": [{ "id": 1101, "amount": 10 }] } ] } ] },
+  "10019": { "id": 10019, "name": "Flour Mill", "sub_shops": [
+    { "name": "Mill", "goods": [ { "id": 7, "name": "Flour", "cost": { "id": 1001, "amount": 3, "name": "Wheat" }, "gains": [{ "id": 1004, "amount": 2 }] } ] } ] },
+  "10200": { "id": 10200, "name": "Other", "sub_shops": [
+    { "name": "X", "goods": [ { "id": 9, "name": "Junk", "cost": { "id": 1, "amount": 1, "name": "Coins" }, "gains": [{ "id": 1001, "amount": 1 }] } ] } ] }
+}

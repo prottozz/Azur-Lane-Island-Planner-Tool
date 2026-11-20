@@ -1,0 +1,9 @@
+node_modules
+dist
+dist-server
+data/state.json
+data/backups
+data/seed
+.git
+.github
+.superpowers

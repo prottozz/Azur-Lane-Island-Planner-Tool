@@ -1,0 +1,9 @@
+{
+  "1001": { "id": 1001, "name": "Wheat", "categories": ["Crops"], "convert_points": 0, "can_convert": false, "order_price": 60 },
+  "1002": { "id": 1002, "name": "Soybean", "categories": ["Crops"], "convert_points": 0, "can_convert": false, "order_price": 40 },
+  "1003": { "id": 1003, "name": "Egg", "categories": ["Livestock"], "convert_points": 0, "can_convert": false, "order_price": 80 },
+  "1004": { "id": 1004, "name": "Flour", "categories": ["Processed"], "convert_points": 0, "can_convert": false, "order_price": 0 },
+  "1101": { "id": 1101, "name": "Wheat Seeds", "categories": ["Seeds"], "convert_points": 0, "can_convert": false, "order_price": 0 },
+  "2001": { "id": 2001, "name": "Tofu", "categories": ["Dishes"], "convert_points": 120, "can_convert": true, "order_price": 340 },
+  "3001": { "id": 3001, "name": "Clock", "categories": ["Goods"], "convert_points": 310, "can_convert": true, "order_price": 900, "sellable_at": [1] }
+}
