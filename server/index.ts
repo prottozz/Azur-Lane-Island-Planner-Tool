@@ -23,7 +23,8 @@ function assertWritable(dir: string): void {
 
 assertWritable(dataDir);
 
-if (host !== '127.0.0.1' && host !== 'localhost' && !basicAuth) {
+const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'];
+if (!loopback.includes(host) && !basicAuth) {
   console.warn('Listening on all interfaces without BASIC_AUTH — anyone on your network can edit your data');
 }
 

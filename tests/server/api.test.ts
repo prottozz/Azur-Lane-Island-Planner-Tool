@@ -108,6 +108,13 @@ describe('basic auth', () => {
     expect(r.headers['www-authenticate']).toBe('Basic realm="Island Planner"');
   });
 
+  it('leaves /api/health open for container health checks but protects everything else', async () => {
+    const app = createApp(dir, { basicAuth: 'me:pw' });
+    expect((await request(app).get('/api/health')).status).toBe(200);
+    expect((await request(app).get('/api/state')).status).toBe(401);
+    expect((await request(app).get('/')).status).toBe(401);
+  });
+
   it('accepts correct credentials', async () => {
     const r = await request(createApp(dir, { basicAuth: 'me:pw' })).get('/api/state').set('Authorization', header('me:pw'));
     expect(r.status).toBe(200);
@@ -119,10 +126,5 @@ describe('basic auth', () => {
       const r = await request(app).get('/api/state').set('Authorization', header(bad));
       expect(r.status).toBe(401);
     }
-  });
-
-  it('protects health too', async () => {
-    const r = await request(createApp(dir, { basicAuth: 'me:pw' })).get('/api/health');
-    expect(r.status).toBe(401);
   });
 });

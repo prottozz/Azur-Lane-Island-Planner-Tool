@@ -62,13 +62,14 @@ export function createApp(dataDir: string, opts: AppOptions = {}): express.Expre
   for (const loaded of Object.values(cache)) if (loaded.warning) warnings.push(loaded.warning);
 
   const app = express();
-  if (opts.basicAuth) app.use(basicAuthMiddleware(opts.basicAuth));
-
-  const json = express.json({ limit: '10mb' });
-
+  // Registered before basic auth so container health checks work; the body is only warnings.
   app.get('/api/health', (_req, res) => {
     res.json({ warnings });
   });
+
+  if (opts.basicAuth) app.use(basicAuthMiddleware(opts.basicAuth));
+
+  const json = express.json({ limit: '10mb' });
 
   for (const [route, name] of [['gamedata', 'gamedata'], ['state', 'state']] as [string, StoreName][]) {
     app.get(`/api/${route}`, (_req, res) => {

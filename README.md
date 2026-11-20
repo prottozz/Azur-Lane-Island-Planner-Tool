@@ -38,7 +38,7 @@ Everything lives in the data directory (`./data` by default, or `DATA_DIR`):
 
 If a file is damaged (for example half-written), the server restores the newest valid backup and the app shows a warning banner at the top.
 
-Configuration is by environment variable: `HOST` (default `127.0.0.1`), `PORT` (`4747`), `DATA_DIR`, `SEED_GAMEDATA` (copied to `gamedata.json` on first run if none exists) and `BASIC_AUTH` (`user:password`, turns on a login prompt).
+Configuration is by environment variable: `HOST` (default `127.0.0.1`), `PORT` (`4747`), `DATA_DIR`, `SEED_GAMEDATA` (copied to `gamedata.json` on first run if none exists; if the file is missing it is ignored silently and the app starts empty) and `BASIC_AUTH` (`user:password`, turns on a login prompt).
 
 ## Deploy with Portainer
 
