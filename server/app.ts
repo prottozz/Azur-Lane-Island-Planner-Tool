@@ -13,11 +13,11 @@ export interface AppOptions {
   seedPath?: string;
 }
 
-/** Copies seedPath to <dataDir>/gamedata.json only if that file does not exist. */
+/** Copies seedPath to <dataDir>/gamedata.json only if that file does not exist. A missing seed file is silently skipped. */
 export function seedIfEmpty(dataDir: string, seedPath: string | undefined): boolean {
   if (!seedPath) return false;
   const target = path.join(dataDir, 'gamedata.json');
-  if (fs.existsSync(target)) return false;
+  if (fs.existsSync(target) || !fs.existsSync(seedPath)) return false;
   fs.mkdirSync(dataDir, { recursive: true });
   fs.copyFileSync(seedPath, target);
   return true;

@@ -82,8 +82,18 @@ describe('seedIfEmpty', () => {
     expect(seedIfEmpty(dir, undefined)).toBe(false);
   });
 
+  it('returns false silently when the seed file does not exist', async () => {
+    const dataDir = path.join(dir, 'data');
+    const missing = path.join(dir, 'missing-seed.json');
+    expect(seedIfEmpty(dataDir, missing)).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'gamedata.json'))).toBe(false);
+    const r = await request(createApp(dataDir, { seedPath: missing })).get('/api/health');
+    expect(r.body.warnings).toEqual([]);
+  });
+
   it('reports a seed failure as a health warning', async () => {
-    const app = createApp(dir, { seedPath: path.join(dir, 'missing-seed.json') });
+    // A directory exists but cannot be copied as a file.
+    const app = createApp(dir, { seedPath: dir });
     const r = await request(app).get('/api/health');
     expect(r.body.warnings[0]).toMatch(/seed/i);
   });

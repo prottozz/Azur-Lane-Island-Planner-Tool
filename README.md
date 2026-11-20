@@ -40,6 +40,21 @@ If a file is damaged (for example half-written), the server restores the newest 
 
 Configuration is by environment variable: `HOST` (default `127.0.0.1`), `PORT` (`4747`), `DATA_DIR`, `SEED_GAMEDATA` (copied to `gamedata.json` on first run if none exists) and `BASIC_AUTH` (`user:password`, turns on a login prompt).
 
+## Deploy with Portainer
+
+CI builds and publishes `ghcr.io/prottozz/azur-lane-island-planner-tool` (tags `latest` and `sha-<short>`, for amd64 and arm64) on every push to `main`.
+
+1. In Portainer go to Stacks, Add stack, Web editor, and paste the contents of `docker-compose.yml` (or choose Repository, point it at this repo, compose path `docker-compose.yml`).
+2. Click Deploy, then open http://your-host:4747.
+
+Notes:
+
+- If the GHCR package is private, add a registry in Portainer (`ghcr.io`, username `prottozz`, a GitHub token with `read:packages`), or make the package public in the repo's Packages settings.
+- To update, open the stack and use "Pull and redeploy".
+- Data lives in the `island-data` volume, mounted at `/data`. On first run the image's bundled `gamedata.json` (if there is one) is copied in. Edits made in the Data tab exist only in that volume, not in git, so use Export JSON to save them into the repo, and back up the volume.
+- If you bind-mount a host folder instead of the named volume, it must be writable by uid 1000 (`chown 1000 <folder>`). Otherwise the container logs `DATA_DIR /data is not writable by uid 1000` and exits.
+- Do not expose port 4747 to the internet without setting `BASIC_AUTH` (uncomment it in the compose file, e.g. `"user:a-long-password"`). The container listens on all interfaces and logs a warning when `BASIC_AUTH` is not set.
+
 ## Development
 
 ```
