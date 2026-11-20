@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Header } from './components/Header';
+import { ErrorBoundary } from './ErrorBoundary';
 import { CafeTab } from './tabs/CafeTab';
 import { DataTab } from './tabs/DataTab';
 import { GoodsTab } from './tabs/GoodsTab';
@@ -40,7 +41,10 @@ export function App() {
       </nav>
       <main className="tab-body">
         <h2>{label}</h2>
-        {tab === 'cafe' ? <CafeTab /> : tab === 'goods' ? <GoodsTab /> : tab === 'stock' ? <StockTab /> : <DataTab />}
+        {/* Keyed by tab: a crash in one tab leaves the header and the other tabs (including Data → Import JSON) usable. */}
+        <ErrorBoundary key={tab}>
+          {tab === 'cafe' ? <CafeTab /> : tab === 'goods' ? <GoodsTab /> : tab === 'stock' ? <StockTab /> : <DataTab />}
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CafePanel } from '../../src/client/components/CafePanel';
 import { Shortfalls } from '../../src/client/components/Shortfalls';
 import { CafeTab } from '../../src/client/tabs/CafeTab';
-import { AppStateContext } from '../../src/client/useAppState';
+import { AppStateContext, NowContext } from '../../src/client/useAppState';
 import type { AppState } from '../../src/client/useAppState';
 import { emptyGameData, emptyState } from '../../src/shared/defaults';
 import { buildPlan } from '../../src/shared/planner/suggest';
@@ -46,7 +46,7 @@ function makeHolder(over: Partial<State> = {}): Holder {
 function Harness({ holder, children }: { holder: Holder; children: React.ReactNode }) {
   const [state, setState] = useState(holder.state);
   const app: AppState = {
-    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), now: NOW, warnings: [],
+    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), warnings: [],
     apply(fn: (s: State, gd: GameData) => Result<State> | State) {
       const r = fn(holder.state, holder.gd);
       if ('ok' in r && typeof r.ok === 'boolean') {
@@ -56,9 +56,9 @@ function Harness({ holder, children }: { holder: Holder; children: React.ReactNo
       setState(holder.state);
       return null;
     },
-    applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
   };
-  return <AppStateContext.Provider value={app}>{children}</AppStateContext.Provider>;
+  return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}>{children}</NowContext.Provider></AppStateContext.Provider>;
 }
 
 afterEach(cleanup);
@@ -157,6 +157,19 @@ describe('CafePanel', () => {
     expect(holder.state.settings.money).toBe(350);
     expect(screen.getByText(/Done/).textContent).toMatch(/250/);
   });
+
+  it('caps the leftover input at the qty sent in the run', () => {
+    const run = { id: 'r', date: '2025-12-31', cafeId: 'cafe', dishes: [{ item: 'tofu', qty: 10 }], status: 'running' as const,
+      startedAt: new Date(2025, 11, 31, 23, 0).toISOString(), leftovers: [], income: null };
+    const holder = makeHolder({ cafePlans: plan3, cafeRuns: [run] });
+    render(<Harness holder={holder}><CafePanel /></Harness>);
+    const left = screen.getByLabelText('Leftover Tofu') as HTMLInputElement;
+    expect(left.max).toBe('10');
+    fireEvent.change(left, { target: { value: '25' } });
+    expect(left.value).toBe('10');
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+    expect(holder.state.stock.tofu).toBe(10);
+  });
 });
 
 describe('CafeTab', () => {
@@ -171,9 +184,15 @@ describe('CafeTab', () => {
     fireEvent.click(screen.getByRole('button', { name: '−' }));
     expect(holder.state.requests).toMatchObject({ dailyDone: 3, weeklyDone: 8 });
     fireEvent.change(screen.getByLabelText('Daily cap'), { target: { value: '7' } });
+    expect(holder.state.requests.dailyCap).toBe(5);                     // commits on blur/Enter, not per keystroke
+    fireEvent.blur(screen.getByLabelText('Daily cap'));
     expect(holder.state.requests.dailyCap).toBe(7);
     fireEvent.change(screen.getByLabelText('Weekly cap'), { target: { value: '-2' } });
+    fireEvent.keyDown(screen.getByLabelText('Weekly cap'), { key: 'Enter' });
     expect(holder.state.requests.weeklyCap).toBe(20);
+    expect(screen.getByRole('alert').textContent).toMatch(/Weekly cap must be a whole number/);
+    fireEvent.keyDown(screen.getByLabelText('Weekly cap'), { key: 'Escape' });
+    expect((screen.getByLabelText('Weekly cap') as HTMLInputElement).value).toBe('20');
   });
 });
 
@@ -200,6 +219,29 @@ describe('Shortfalls', () => {
     const row = screen.getByTestId('purchase-egg');
     fireEvent.click(within(row).getByRole('button', { name: 'Bought' }));
     expect(holder.state.stock.egg).toBe(5);
+  });
+
+  it('Bought deducts the cost from a tracked money balance (money purchases only), in one apply', () => {
+    const holder = makeHolder({ settings: { ...emptyState(NOW).settings, money: 1000 } });
+    const withMoney: Expansion = { ...expansion, purchases: [
+      { item: 'egg', qty: 5, cost: 100, currency: 'money' },
+      { item: 'milk', qty: 3, cost: 60, currency: 'coin' },
+    ] };
+    render(<Harness holder={holder}><Shortfalls expansion={withMoney} /></Harness>);
+    fireEvent.click(within(screen.getByTestId('purchase-egg')).getByRole('button', { name: 'Bought' }));
+    expect(holder.state.stock.egg).toBe(5);
+    expect(holder.state.settings.money).toBe(900);
+    fireEvent.click(within(screen.getByTestId('purchase-milk')).getByRole('button', { name: 'Bought' }));
+    expect(holder.state.stock.milk).toBe(3);
+    expect(holder.state.settings.money).toBe(900);
+  });
+
+  it('Bought leaves an untracked balance untracked', () => {
+    const holder = makeHolder();
+    render(<Harness holder={holder}><Shortfalls expansion={{ ...expansion, purchases: [{ item: 'egg', qty: 5, cost: 100, currency: 'money' }] }} /></Harness>);
+    fireEvent.click(within(screen.getByTestId('purchase-egg')).getByRole('button', { name: 'Bought' }));
+    expect(holder.state.stock.egg).toBe(5);
+    expect(holder.state.settings.money).toBeNull();
   });
 
   it('empty expansion says nothing missing', () => {

@@ -32,6 +32,8 @@ interface Props<T> {
   onDuplicate?(row: T): string | null;
   onDelete?(row: T): string | null;
   addDisabledReason?: string;
+  /** Key of a just-added row: rendered first and highlighted. */
+  freshKey?: string | null;
 }
 
 function EditCell<T>({ col, row, label }: { col: Column<T>; row: T; label: string }) {
@@ -69,7 +71,13 @@ function EditCell<T>({ col, row, label }: { col: Column<T>; row: T; label: strin
   );
 }
 
-export function DataTable<T>({ columns, rows, rowKey, rowLabel, addLabel, onAdd, onDuplicate, onDelete, addDisabledReason }: Props<T>) {
+function freshFirst<T>(rows: T[], rowKey: (row: T) => string, freshKey: string | null | undefined): T[] {
+  if (!freshKey) return rows;
+  const i = rows.findIndex(r => rowKey(r) === freshKey);
+  return i <= 0 ? rows : [rows[i], ...rows.slice(0, i), ...rows.slice(i + 1)];
+}
+
+export function DataTable<T>({ columns, rows, rowKey, rowLabel, addLabel, onAdd, onDuplicate, onDelete, addDisabledReason, freshKey }: Props<T>) {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [addError, setAddError] = useState<string | null>(null);
 
@@ -91,11 +99,11 @@ export function DataTable<T>({ columns, rows, rowKey, rowLabel, addLabel, onAdd,
           </tr>
         </thead>
         <tbody>
-          {rows.map(row => {
+          {freshFirst(rows, rowKey, freshKey).map(row => {
             const key = rowKey(row);
             const label = rowLabel(row);
             return (
-              <tr key={key} data-testid={`row-${key}`}>
+              <tr key={key} data-testid={`row-${key}`} className={key === freshKey ? 'fresh' : undefined}>
                 {columns.map(c => (
                   <td key={c.key}>{c.edit ? <EditCell col={c} row={row} label={label} /> : c.render?.(row)}</td>
                 ))}

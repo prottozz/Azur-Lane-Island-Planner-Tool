@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataTab } from '../../src/client/tabs/DataTab';
-import { AppStateContext } from '../../src/client/useAppState';
+import { AppStateContext, NowContext } from '../../src/client/useAppState';
 import type { AppState } from '../../src/client/useAppState';
 import { emptyGameData, emptyState } from '../../src/shared/defaults';
 import { buildPlan } from '../../src/shared/planner/suggest';
@@ -38,7 +38,7 @@ interface Holder { gd: GameData; state: State }
 function Harness({ holder }: { holder: Holder }) {
   const [gd, setGd] = useState(holder.gd);
   const app: AppState = {
-    gd, state: holder.state, plan: buildPlan(gd, holder.state, NOW), now: NOW, warnings: [],
+    gd, state: holder.state, plan: buildPlan(gd, holder.state, NOW), warnings: [],
     apply: () => null,
     applyGameData(fn: (g: GameData) => Result<GameData> | GameData) {
       const r = fn(holder.gd);
@@ -49,9 +49,22 @@ function Harness({ holder }: { holder: Holder }) {
       setGd(holder.gd);
       return null;
     },
+    applyAll(fn) {
+      const r = fn(holder.state, holder.gd);
+      if ('ok' in r && typeof r.ok === 'boolean') {
+        if (!r.ok) return r.error;
+        holder.state = r.value.state;
+        holder.gd = r.value.gd;
+      } else {
+        holder.state = (r as { state: State }).state;
+        holder.gd = (r as { gd: GameData }).gd;
+      }
+      setGd(holder.gd);
+      return null;
+    },
     undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
   };
-  return <AppStateContext.Provider value={app}><DataTab /></AppStateContext.Provider>;
+  return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}><DataTab /></NowContext.Provider></AppStateContext.Provider>;
 }
 
 function setup() {
@@ -154,6 +167,59 @@ describe('DataTab', () => {
     expect(copy.id.startsWith('custom-')).toBe(true);
   });
 
+  it('a new or duplicated row appears first and highlighted until the next edit', () => {
+    const holder = setup();
+    const rowIds = () => screen.getAllByTestId(/^row-/).map(r => r.dataset.testid);
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    const added = Object.values(holder.gd.items).find(i => i.name === 'New item')!;
+    expect(rowIds()[0]).toBe(`row-${added.id}`);
+    expect(screen.getByTestId(`row-${added.id}`).className).toBe('fresh');
+    typeInto('Category Wheat', 'grain');                                  // any edit clears it
+    expect(screen.getByTestId(`row-${added.id}`).className).toBe('');
+    expect(rowIds()[0]).not.toBe(`row-${added.id}`);
+    tab('Shop');
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate Wheat Seeds in General' }));
+    expect(rowIds()).toEqual(['row-1', 'row-0']);
+    expect(screen.getByTestId('row-1').className).toBe('fresh');
+  });
+
+  it('switches the season filter to All (with a note) when it would hide a new row', () => {
+    setup();
+    fireEvent.change(screen.getByLabelText('Season filter'), { target: { value: 'permanent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    expect((screen.getByLabelText('Season filter') as HTMLSelectElement).value).toBe('all');
+    expect(screen.getByRole('status').textContent).toMatch(/switched to All/);
+    expect(screen.getByDisplayValue('New item')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Season filter'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate Corn' }));   // season 5 copy: stays visible, no note
+    expect((screen.getByLabelText('Season filter') as HTMLSelectElement).value).toBe('5');
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('removing a café rank remaps café plans in the same change', () => {
+    const holder = setup();
+    holder.gd.cafes.cafe.ranks = ['A', 'B', 'C'].map(name => ({ name, dishSlots: 1, capacityPerDish: 1 }));
+    holder.state = { ...holder.state, cafePlans: [{ cafeId: 'cafe', rankIndex: 2, dishes: [] }] };
+    cleanup();
+    render(<Harness holder={holder} />);
+    tab('Cafés');
+    fireEvent.click(screen.getByLabelText('Remove rank 1 of Tea House'));
+    expect(holder.gd.cafes.cafe.ranks.map(r => r.name)).toEqual(['B', 'C']);
+    expect(holder.state.cafePlans[0].rankIndex).toBe(1);
+  });
+
+  it('Fish tab lists items with fishing info, read-only', () => {
+    const holder = setup();
+    holder.gd.items.koi = { ...item('koi', 'Koi'), fishing: { location: 'Pond', bait: 'Worm', rodLevel: 2, qte: 'Hard', usedIn: 'Koi Soup', idpNote: '12 IDP/fish' } };
+    cleanup();
+    render(<Harness holder={holder} />);
+    tab('Fish');
+    const row = screen.getByTestId('fish-koi');
+    expect([...row.querySelectorAll('td')].map(td => td.textContent)).toEqual(['Koi', 'Pond', 'Worm', '2', 'Hard', 'Koi Soup', '12 IDP/fish']);
+    expect(screen.getAllByTestId(/^fish-/).filter(e => e.tagName === 'TR')).toHaveLength(1);
+    expect(within(screen.getByTestId('fish-table')).queryByRole('textbox')).toBeNull();
+  });
+
   it('season filter 5 hides permanent items; inactive are hidden until toggled', () => {
     const holder = setup();
     expect(screen.getByTestId('row-wheat')).toBeTruthy();
@@ -175,11 +241,14 @@ describe('DataTab', () => {
     const holder = setup();
     tab('Recipes');
     expect(screen.getByText('Wheat Seeds ×9')).toBeTruthy();
+    expect(screen.queryByLabelText('Inputs Wheat @ Field item')).toBeNull();   // picker renders only after "+ add"
+    fireEvent.click(screen.getByLabelText('Add item to Inputs Wheat @ Field'));
     fireEvent.change(screen.getByLabelText('Inputs Wheat @ Field item'), { target: { value: 'corn' } });
     fireEvent.change(screen.getByLabelText('Inputs Wheat @ Field qty'), { target: { value: '4' } });
     fireEvent.click(screen.getByLabelText('Add to Inputs Wheat @ Field'));
     expect(holder.gd.recipes.wheat.inputs).toEqual([{ item: 'seeds', qty: 9 }, { item: 'corn', qty: 4 }]);
     expect(screen.getByTestId('fill-wheat').textContent).toBe('108 Wheat Seeds, 48 Corn');
+    expect(screen.queryByLabelText('Inputs Wheat @ Field item')).toBeNull();   // closes after a successful add
     fireEvent.click(screen.getByLabelText('Remove Corn from Inputs Wheat @ Field'));
     expect(holder.gd.recipes.wheat.inputs).toEqual([{ item: 'seeds', qty: 9 }]);
     fireEvent.click(screen.getByLabelText('Remove Wheat from Outputs Wheat @ Field'));
@@ -190,6 +259,7 @@ describe('DataTab', () => {
   it('adds a bonus output with an every-runs field', () => {
     const holder = setup();
     tab('Recipes');
+    fireEvent.click(screen.getByLabelText('Add item to Bonus Wheat @ Field'));
     fireEvent.change(screen.getByLabelText('Bonus Wheat @ Field qty'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Bonus Wheat @ Field every runs'), { target: { value: '0' } });
     fireEvent.click(screen.getByLabelText('Add to Bonus Wheat @ Field'));
@@ -229,6 +299,7 @@ describe('DataTab', () => {
     expect(holder.gd.cafes.cafe.ranks).toHaveLength(2);
     fireEvent.click(screen.getByLabelText('Remove rank 2 of Tea House'));
     expect(holder.gd.cafes.cafe.ranks).toHaveLength(1);
+    fireEvent.click(screen.getByLabelText('Add item to Sellable Tea House'));
     fireEvent.change(screen.getByLabelText('Sellable Tea House item'), { target: { value: 'wheat' } });
     fireEvent.click(screen.getByLabelText('Add to Sellable Tea House'));
     expect(holder.gd.cafes.cafe.sellable).toEqual(['wheat']);

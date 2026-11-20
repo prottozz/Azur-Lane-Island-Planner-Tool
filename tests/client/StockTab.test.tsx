@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { StockTab } from '../../src/client/tabs/StockTab';
-import { AppStateContext } from '../../src/client/useAppState';
+import { AppStateContext, NowContext } from '../../src/client/useAppState';
 import type { AppState } from '../../src/client/useAppState';
 import { emptyGameData, emptyState } from '../../src/shared/defaults';
 import { buildPlan } from '../../src/shared/planner/suggest';
@@ -33,7 +33,7 @@ interface Holder { gd: GameData; state: State }
 function Harness({ holder }: { holder: Holder }) {
   const [state, setState] = useState(holder.state);
   const app: AppState = {
-    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), now: NOW, warnings: [],
+    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), warnings: [],
     apply(fn: (s: State, gd: GameData) => Result<State> | State) {
       const r = fn(holder.state, holder.gd);
       if ('ok' in r && typeof r.ok === 'boolean') {
@@ -43,9 +43,9 @@ function Harness({ holder }: { holder: Holder }) {
       setState(holder.state);
       return null;
     },
-    applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
   };
-  return <AppStateContext.Provider value={app}><StockTab /></AppStateContext.Provider>;
+  return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}><StockTab /></NowContext.Provider></AppStateContext.Provider>;
 }
 
 function setup(stock: Record<string, number>) {

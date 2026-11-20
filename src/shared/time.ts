@@ -69,3 +69,8 @@ export function lastWeeklyResetAt(now: Date, resetTime: string, weekday: number)
   const candidate = atTime(now, resetTime, -back);
   return candidate.getTime() <= now.getTime() ? candidate : atTime(now, resetTime, -back - 7);
 }
+
+/** Local clock time as HH:MM (24 h). */
+export function hhmm(d: Date): string {
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}

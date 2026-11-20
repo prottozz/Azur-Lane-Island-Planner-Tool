@@ -7,11 +7,13 @@ interface Props {
   ranks: CafeRank[];
   /** Returns an error message, or null when the change was accepted. */
   onChange(next: CafeRank[]): string | null;
+  /** Removes rank `index` (and remaps café plans); returns an error message, or null. */
+  onRemove(index: number): string | null;
 }
 
 const positiveInt = (raw: string): number | null => (/^\d+$/.test(raw.trim()) && Number(raw) > 0 ? Number(raw) : null);
 
-export function RanksEditor({ label, ranks, onChange }: Props) {
+export function RanksEditor({ label, ranks, onChange, onRemove }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const update = (i: number, change: Partial<CafeRank>) => onChange(ranks.map((r, j) => (j === i ? { ...r, ...change } : r)));
@@ -22,7 +24,7 @@ export function RanksEditor({ label, ranks, onChange }: Props) {
 
   const remove = (i: number) => {
     if (ranks.length <= 1) { setError('A café needs at least one rank'); return; }
-    setError(onChange(ranks.filter((_, j) => j !== i)));
+    setError(onRemove(i));
   };
   const add = () => setError(onChange([...ranks, { name: `Rank ${ranks.length + 1}`, dishSlots: 1, capacityPerDish: 1 }]));
 

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { deleteEntity } from '../../shared/gamedata';
+import { deleteEntity, removeCafeRank } from '../../shared/gamedata';
 import type { EntityRef } from '../../shared/gamedata';
 import { newId } from '../../shared/ids';
 import { fillJob } from '../../shared/recipes';
@@ -15,7 +15,14 @@ import { parseName, parseNonNegative, parseOptionalValue, parsePositiveInt, pars
 
 type TableKey = 'items' | 'buildings' | 'recipes' | 'cafes' | 'spawns';
 type Row<K extends TableKey> = GameData[K][string];
-export interface Visibility { visible(e: { season: Season; active: boolean }): boolean }
+export interface NewRow { id: string; season?: Season }
+export interface Visibility {
+  visible(e: { season: Season; active: boolean }): boolean;
+  /** Row key of a just-added/duplicated row: shown first and highlighted. */
+  fresh?: string | null;
+  /** Called after Add/Duplicate succeeds. */
+  onCreated?(row: NewRow): void;
+}
 
 const BUILDING_KINDS: BuildingKind[] = ['field', 'orchard', 'nursery', 'ranch', 'hatchery', 'mine', 'woods', 'kitchen', 'factory', 'mill', 'other'];
 const PIPELINES: Pipeline[] = ['food', 'goods', 'both'];
@@ -30,6 +37,13 @@ function patch<K extends TableKey>(gd: GameData, key: K, id: string, change: Par
 
 function put<K extends TableKey>(app: AppState, key: K, entity: Row<K>): string | null {
   return app.applyGameData(gd => ({ ...gd, [key]: { ...gd[key], [entity.id]: entity } }));
+}
+
+/** put() that reports the new row on success. */
+function create<K extends TableKey>(app: AppState, key: K, entity: Row<K>, onCreated: Visibility['onCreated']): string | null {
+  const err = put(app, key, entity);
+  if (!err) onCreated?.({ id: entity.id, season: entity.season });
+  return err;
 }
 
 function remove(app: AppState, ref: EntityRef): string | null {
@@ -62,7 +76,7 @@ const buildingOptions = (gd: GameData) => Object.values(gd.buildings).sort((a, b
 const itemName = (gd: GameData, id: string) => gd.items[id]?.name ?? id;
 const byName = <T extends { name: string }>(list: T[]) => list.sort((a, b) => a.name.localeCompare(b.name));
 
-export function ItemsTable({ visible }: Visibility) {
+export function ItemsTable({ visible, fresh, onCreated }: Visibility) {
   const app = useApp();
   const { gd, state } = app;
   const rows = byName(Object.values(gd.items).filter(visible));
@@ -74,14 +88,14 @@ export function ItemsTable({ visible }: Visibility) {
     ...seasonAndActive('items'),
   ];
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => r.id} rowLabel={r => r.name} addLabel="Add item"
-      onAdd={() => put(app, 'items', { id: newCustomId(), name: 'New item', category: '', idp: null, cafeValue: null, season: state.settings.season, active: true })}
-      onDuplicate={r => put(app, 'items', { ...r, id: newCustomId(), name: `${r.name} (copy)` })}
+    <DataTable columns={columns} rows={rows} rowKey={r => r.id} freshKey={fresh} rowLabel={r => r.name} addLabel="Add item"
+      onAdd={() => create(app, 'items', { id: newCustomId(), name: 'New item', category: '', idp: null, cafeValue: null, season: state.settings.season, active: true }, onCreated)}
+      onDuplicate={r => create(app, 'items', { ...r, id: newCustomId(), name: `${r.name} (copy)` }, onCreated)}
       onDelete={r => remove(app, { kind: 'item', id: r.id })} />
   );
 }
 
-export function BuildingsTable({ visible }: Visibility) {
+export function BuildingsTable({ visible, fresh, onCreated }: Visibility) {
   const app = useApp();
   const { gd, state } = app;
   const rows = byName(Object.values(gd.buildings).filter(visible));
@@ -93,16 +107,16 @@ export function BuildingsTable({ visible }: Visibility) {
     ...seasonAndActive('buildings'),
   ];
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => r.id} rowLabel={r => r.name} addLabel="Add building"
-      onAdd={() => put(app, 'buildings', { id: newCustomId(), name: 'New building', kind: 'other', pipeline: 'both', slots: 1, season: state.settings.season, active: true })}
-      onDuplicate={r => put(app, 'buildings', { ...r, id: newCustomId(), name: `${r.name} (copy)` })}
+    <DataTable columns={columns} rows={rows} rowKey={r => r.id} freshKey={fresh} rowLabel={r => r.name} addLabel="Add building"
+      onAdd={() => create(app, 'buildings', { id: newCustomId(), name: 'New building', kind: 'other', pipeline: 'both', slots: 1, season: state.settings.season, active: true }, onCreated)}
+      onDuplicate={r => create(app, 'buildings', { ...r, id: newCustomId(), name: `${r.name} (copy)` }, onCreated)}
       onDelete={r => remove(app, { kind: 'building', id: r.id })} />
   );
 }
 
 const recipeLabel = (gd: GameData, r: Recipe) => `${itemName(gd, r.outputs[0]?.item ?? r.id)} @ ${gd.buildings[r.buildingId]?.name ?? r.buildingId}`;
 
-export function RecipesTable({ visible }: Visibility) {
+export function RecipesTable({ visible, fresh, onCreated }: Visibility) {
   const app = useApp();
   const { gd, state } = app;
   const rows = Object.values(gd.recipes).filter(visible).sort((a, b) => recipeLabel(gd, a).localeCompare(recipeLabel(gd, b)));
@@ -126,16 +140,16 @@ export function RecipesTable({ visible }: Visibility) {
   const first = Object.values(gd.buildings)[0];
   const firstItem = Object.values(gd.items)[0];
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => r.id} rowLabel={r => recipeLabel(gd, r)} addLabel="Add recipe"
+    <DataTable columns={columns} rows={rows} rowKey={r => r.id} freshKey={fresh} rowLabel={r => recipeLabel(gd, r)} addLabel="Add recipe"
       addDisabledReason={first && firstItem ? undefined : 'Add a building and an item first.'}
-      onAdd={() => put(app, 'recipes', { id: newCustomId(), buildingId: first.id, inputs: [], outputs: [{ item: firstItem.id, qty: 1 }], bonus: [],
-        maxRuns: 1, secondsPerRun: 60, stamina: 0, season: state.settings.season, active: true })}
-      onDuplicate={r => put(app, 'recipes', { ...r, id: newCustomId() })}
+      onAdd={() => create(app, 'recipes', { id: newCustomId(), buildingId: first.id, inputs: [], outputs: [{ item: firstItem.id, qty: 1 }], bonus: [],
+        maxRuns: 1, secondsPerRun: 60, stamina: 0, season: state.settings.season, active: true }, onCreated)}
+      onDuplicate={r => create(app, 'recipes', { ...r, id: newCustomId() }, onCreated)}
       onDelete={r => remove(app, { kind: 'recipe', id: r.id })} />
   );
 }
 
-export function CafesTable({ visible }: Visibility) {
+export function CafesTable({ visible, fresh, onCreated }: Visibility) {
   const app = useApp();
   const { gd, state } = app;
   const rows = byName(Object.values(gd.cafes).filter(visible));
@@ -146,23 +160,24 @@ export function CafesTable({ visible }: Visibility) {
     { key: 'sellable', label: 'Sellable', render: r => (
       <QtyChipsEditor label={`Sellable ${r.name}`} items={gd.items} withQty={false} entries={r.sellable.map(item => ({ item, qty: 1 }))}
         onChange={next => set(r.id, { sellable: next.map(e => e.item) })} />) },
-    { key: 'ranks', label: 'Ranks', render: r => <RanksEditor label={r.name} ranks={r.ranks} onChange={next => set(r.id, { ranks: next })} /> },
+    { key: 'ranks', label: 'Ranks', render: r => <RanksEditor label={r.name} ranks={r.ranks} onChange={next => set(r.id, { ranks: next })}
+      onRemove={i => app.applyAll((s, g) => removeCafeRank(g, s, r.id, i))} /> },
     ...seasonAndActive('cafes'),
   ];
   const first = Object.values(gd.buildings)[0];
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => r.id} rowLabel={r => r.name} addLabel="Add café"
+    <DataTable columns={columns} rows={rows} rowKey={r => r.id} freshKey={fresh} rowLabel={r => r.name} addLabel="Add café"
       addDisabledReason={first ? undefined : 'Add a building first.'}
-      onAdd={() => put(app, 'cafes', { id: newCustomId(), name: 'New café', kitchenBuildingId: first.id, sellable: [],
-        ranks: [{ name: 'Rank 1', dishSlots: 1, capacityPerDish: 1 }], season: state.settings.season, active: true })}
-      onDuplicate={r => put(app, 'cafes', { ...r, id: newCustomId(), name: `${r.name} (copy)`, ranks: r.ranks.map(k => ({ ...k })) })}
+      onAdd={() => create(app, 'cafes', { id: newCustomId(), name: 'New café', kitchenBuildingId: first.id, sellable: [],
+        ranks: [{ name: 'Rank 1', dishSlots: 1, capacityPerDish: 1 }], season: state.settings.season, active: true }, onCreated)}
+      onDuplicate={r => create(app, 'cafes', { ...r, id: newCustomId(), name: `${r.name} (copy)`, ranks: r.ranks.map(k => ({ ...k })) }, onCreated)}
       onDelete={r => remove(app, { kind: 'cafe', id: r.id })} />
   );
 }
 
 type ShopRow = ShopEntry & { index: number };
 
-export function ShopTable() {
+export function ShopTable({ fresh, onCreated }: Omit<Visibility, 'visible'>) {
   const app = useApp();
   const { gd } = app;
   const rows: ShopRow[] = gd.shop.map((e, index) => ({ ...e, index }));
@@ -179,16 +194,23 @@ export function ShopTable() {
   ];
   const firstItem = Object.values(gd.items)[0];
   const last = gd.shop[gd.shop.length - 1];
+  /** Shop rows are keyed by index; a new entry is appended, so its key is the old length. */
+  const append = (entry: ShopEntry) => {
+    const index = app.gd.shop.length;
+    const err = app.applyGameData(cur => ({ ...cur, shop: [...cur.shop, entry] }));
+    if (!err) onCreated?.({ id: String(index) });
+    return err;
+  };
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => String(r.index)} rowLabel={r => `${itemName(gd, r.item)} in ${r.shop}`} addLabel="Add shop entry"
+    <DataTable columns={columns} rows={rows} rowKey={r => String(r.index)} freshKey={fresh} rowLabel={r => `${itemName(gd, r.item)} in ${r.shop}`} addLabel="Add shop entry"
       addDisabledReason={firstItem ? undefined : 'Add an item first.'}
-      onAdd={() => app.applyGameData(cur => ({ ...cur, shop: [...cur.shop, { item: firstItem.id, price: 0, currency: last?.currency ?? 'coin', shop: last?.shop ?? 'shop' }] }))}
-      onDuplicate={r => app.applyGameData(cur => ({ ...cur, shop: [...cur.shop, { item: r.item, price: r.price, currency: r.currency, shop: r.shop }] }))}
+      onAdd={() => append({ item: firstItem.id, price: 0, currency: last?.currency ?? 'coin', shop: last?.shop ?? 'shop' })}
+      onDuplicate={r => append({ item: r.item, price: r.price, currency: r.currency, shop: r.shop })}
       onDelete={r => app.applyGameData(cur => ({ ...cur, shop: cur.shop.filter((_, i) => i !== r.index) }))} />
   );
 }
 
-export function SpawnsTable({ visible }: Visibility) {
+export function SpawnsTable({ visible, fresh, onCreated }: Visibility) {
   const app = useApp();
   const { gd, state } = app;
   const rows = useMemo(() => Object.values(gd.spawns).filter(visible).sort((a, b) => itemName(gd, a.item).localeCompare(itemName(gd, b.item))), [gd, visible]);
@@ -199,10 +221,32 @@ export function SpawnsTable({ visible }: Visibility) {
   ];
   const firstItem = Object.values(gd.items)[0];
   return (
-    <DataTable columns={columns} rows={rows} rowKey={r => r.id} rowLabel={r => itemName(gd, r.item)} addLabel="Add daily spawn"
+    <DataTable columns={columns} rows={rows} rowKey={r => r.id} freshKey={fresh} rowLabel={r => itemName(gd, r.item)} addLabel="Add daily spawn"
       addDisabledReason={firstItem ? undefined : 'Add an item first.'}
-      onAdd={() => put(app, 'spawns', { id: newCustomId(), item: firstItem.id, qtyPerDay: 1, season: state.settings.season, active: true })}
-      onDuplicate={r => put(app, 'spawns', { ...r, id: newCustomId() })}
+      onAdd={() => create(app, 'spawns', { id: newCustomId(), item: firstItem.id, qtyPerDay: 1, season: state.settings.season, active: true }, onCreated)}
+      onDuplicate={r => create(app, 'spawns', { ...r, id: newCustomId() }, onCreated)}
       onDelete={r => app.applyGameData(cur => ({ ...cur, spawns: Object.fromEntries(Object.entries(cur.spawns).filter(([id]) => id !== r.id)) }))} />
+  );
+}
+
+/** Read-only list of items with fishing info (imported from the fish sheet). */
+export function FishTable({ visible }: Visibility) {
+  const { gd } = useApp();
+  const fish = byName(Object.values(gd.items).filter(i => i.fishing && visible(i)));
+  if (fish.length === 0) return <p className="muted">No items with fishing info{Object.values(gd.items).some(i => i.fishing) ? ' match the current filters' : ''}.</p>;
+  return (
+    <table data-testid="fish-table">
+      <thead>
+        <tr><th>Name</th><th>Location</th><th>Bait</th><th>Rod level</th><th>QTE</th><th>Used in</th><th>IDP note</th></tr>
+      </thead>
+      <tbody>
+        {fish.map(i => (
+          <tr key={i.id} data-testid={`fish-${i.id}`}>
+            <td>{i.name}</td><td>{i.fishing!.location}</td><td>{i.fishing!.bait}</td><td>{i.fishing!.rodLevel}</td>
+            <td>{i.fishing!.qte}</td><td>{i.fishing!.usedIn}</td><td>{i.fishing!.idpNote ?? ''}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

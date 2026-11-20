@@ -57,3 +57,10 @@ tr.short td { background: #fdecec; }
 .chip-remove { padding: 0 4px; border: none; background: none; }
 .chip-add, .rank-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; }
 .paste-import textarea { max-width: 100%; }
+.blockers { display: inline-flex; flex-wrap: wrap; gap: 8px; font-size: 0.9em; }
+.blockers .waiting { color: #7a4b00; }
+.blockers .missing { color: #8a1c1c; }
+.orphans ul { margin: 4px 0; padding-left: 20px; }
+.clock { font-variant-numeric: tabular-nums; font-weight: 600; }
+tr.fresh td { background: #fff7e0; }
+.note { color: #7a4b00; }

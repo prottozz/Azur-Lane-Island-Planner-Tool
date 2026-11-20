@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BuildingBoard } from '../../src/client/components/BuildingBoard';
-import { AppStateContext } from '../../src/client/useAppState';
+import { AppStateContext, NowContext } from '../../src/client/useAppState';
 import type { AppState } from '../../src/client/useAppState';
 import { emptyGameData, emptyState } from '../../src/shared/defaults';
 import { buildPlan } from '../../src/shared/planner/suggest';
+import { hhmm } from '../../src/shared/time';
 import type { GameData, Result, State } from '../../src/shared/types';
 
 const NOW = new Date('2026-01-01T12:00:00Z');
@@ -35,7 +37,7 @@ function makeHolder(stock: Record<string, number>, jobs: State['jobs'] = []): Ho
 
 function Harness({ holder, pipeline }: { holder: Holder; pipeline: 'food' | 'goods' }) {
   const app: AppState = {
-    gd: holder.gd, state: holder.state, plan: buildPlan(holder.gd, holder.state, NOW), now: NOW, warnings: [],
+    gd: holder.gd, state: holder.state, plan: buildPlan(holder.gd, holder.state, NOW), warnings: [],
     apply(fn: (s: State, gd: GameData) => Result<State> | State) {
       const r = fn(holder.state, holder.gd);
       if ('ok' in r && typeof r.ok === 'boolean') {
@@ -44,9 +46,9 @@ function Harness({ holder, pipeline }: { holder: Holder; pipeline: 'food' | 'goo
       } else holder.state = r as State;
       return null;
     },
-    applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
   };
-  return <AppStateContext.Provider value={app}><BuildingBoard pipeline={pipeline} /></AppStateContext.Provider>;
+  return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}><BuildingBoard pipeline={pipeline} /></NowContext.Provider></AppStateContext.Provider>;
 }
 
 afterEach(cleanup);
@@ -78,7 +80,7 @@ describe('BuildingBoard', () => {
     render(<Harness holder={holder} pipeline="food" />);
     const start = within(screen.getByTestId('slot-field-0')).getByRole('button', { name: 'Start' }) as HTMLButtonElement;
     expect(start.disabled).toBe(true);
-    expect(start.title).toMatch(/Wheat Seeds ×\d+/);
+    expect(within(screen.getByTestId('slot-field-0')).getByTestId('blockers').textContent).toMatch(/Missing: Wheat Seeds ×\d+/);
   });
 
   it('running job shows Finish; one click adds the outputs', () => {
@@ -180,5 +182,105 @@ describe('JobDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(screen.getByRole('alert').textContent).toMatch(/Not enough stock/);
     expect(holder.state.jobs).toHaveLength(0);
+  });
+});
+
+describe('waiting for running jobs, and orphan jobs', () => {
+  function soyGd(): GameData {
+    const gd = emptyGameData();
+    const it = (id: string, name: string) => ({ id, name, category: 'x', idp: null, cafeValue: null, season: 'permanent' as const, active: true });
+    gd.items.soy = it('soy', 'Soybean');
+    gd.items.tofu = it('tofu', 'Tofu');
+    gd.items.seeds = it('seeds', 'Soy Seeds');
+    gd.buildings.field = { id: 'field', name: 'Soy Field', kind: 'field', pipeline: 'food', slots: 1, season: 'permanent', active: true };
+    gd.buildings.koi = { id: 'koi', name: 'Golden Koi', kind: 'kitchen', pipeline: 'food', slots: 1, season: 'permanent', active: true };
+    gd.recipes.r_soy = { id: 'r_soy', buildingId: 'field', inputs: [{ item: 'seeds', qty: 1 }], outputs: [{ item: 'soy', qty: 10 }], bonus: [],
+      maxRuns: 12, secondsPerRun: 600, stamina: 0, season: 'permanent', active: true };
+    gd.recipes.r_tofu = { id: 'r_tofu', buildingId: 'koi', inputs: [{ item: 'soy', qty: 15 }], outputs: [{ item: 'tofu', qty: 1 }], bonus: [],
+      maxRuns: 50, secondsPerRun: 600, stamina: 0, season: 'permanent', active: true };
+    gd.cafes.cafe = { id: 'cafe', name: 'Café', kitchenBuildingId: 'koi', sellable: ['tofu'],
+      ranks: [{ name: 'R1', dishSlots: 1, capacityPerDish: 6 }], season: 'permanent', active: true };
+    return gd;
+  }
+  const job = (id: string, over: Partial<State['jobs'][number]> = {}) => ({
+    id, buildingId: 'field', slot: 0, recipeId: 'r_soy', runs: 10,
+    startedAt: new Date(NOW.getTime() - 7200_000).toISOString(), endsAt: new Date(NOW.getTime() - 60_000).toISOString(), ...over,
+  });
+
+  /** Re-renders on every apply, like the real provider. */
+  function Live({ holder }: { holder: Holder }) {
+    const [state, setState] = useState(holder.state);
+    const app: AppState = {
+      gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), warnings: [],
+      apply(fn) {
+        const r = fn(holder.state, holder.gd);
+        if ('ok' in r && typeof r.ok === 'boolean') {
+          if (!r.ok) return r.error;
+          holder.state = r.value;
+        } else holder.state = r as State;
+        setState(holder.state);
+        return null;
+      },
+      applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    };
+    return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}><BuildingBoard pipeline="food" /></NowContext.Provider></AppStateContext.Provider>;
+  }
+  const live = (stock: Record<string, number>, jobs: State['jobs']) => {
+    const holder: Holder = { gd: soyGd(), state: { ...emptyState(NOW), stock, jobs, cafePlans: [{ cafeId: 'cafe', rankIndex: 0, dishes: ['tofu'] }] }, errors: [] };
+    render(<Live holder={holder} />);
+    return holder;
+  };
+
+  it('Tofu waits for the running soy job: Start disabled with inline text; after Finish, Start works in one click', () => {
+    const soyJob = job('j1');
+    const holder = live({}, [soyJob]);
+    const koi = () => screen.getByTestId('slot-koi-0');
+    const start = () => within(koi()).getByRole('button', { name: 'Start' }) as HTMLButtonElement;
+    expect(start().disabled).toBe(true);
+    expect(within(koi()).getByTestId('blockers').textContent).toBe(`Waiting for Soybean (ready ${hhmm(new Date(soyJob.endsAt))})`);
+    fireEvent.click(start());
+    expect(holder.state.jobs).toHaveLength(1);
+
+    fireEvent.click(within(screen.getByTestId('slot-field-0')).getByRole('button', { name: 'Finish' }));
+    expect(holder.state.stock.soy).toBe(100);
+    expect(start().disabled).toBe(false);
+    expect(within(koi()).queryByTestId('blockers')).toBeNull();
+    fireEvent.click(start());
+    expect(holder.state.jobs).toEqual([expect.objectContaining({ buildingId: 'koi', recipeId: 'r_tofu', runs: 6 })]);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows both waiting and missing parts inline', () => {
+    live({}, [job('j1', { runs: 1, endsAt: new Date(NOW.getTime() + 600_000).toISOString() })]);
+    const text = within(screen.getByTestId('slot-koi-0')).getByTestId('blockers').textContent;
+    expect(text).toContain('Waiting for Soybean (ready');
+    expect(text).toContain('Missing: Soybean ×80');
+  });
+
+  it('lists jobs on a missing building or a removed slot under "Other running jobs" with Finish and Remove', () => {
+    vi.stubGlobal('confirm', () => true);
+    const holder = live({}, [job('gone', { buildingId: 'old-building' }), job('extra', { slot: 3 })]);
+    const list = screen.getByTestId('orphan-jobs');
+    expect(within(list).getByText(/unknown building old-building/)).toBeTruthy();
+    expect(within(screen.getByTestId('orphan-extra')).getByText(/Soy Field, slot 4/)).toBeTruthy();
+    fireEvent.click(within(screen.getByTestId('orphan-gone')).getByRole('button', { name: 'Finish' }));
+    expect(holder.state.stock.soy).toBe(100);
+    fireEvent.click(within(screen.getByTestId('orphan-extra')).getByRole('button', { name: 'Remove' }));
+    vi.unstubAllGlobals();
+    expect(holder.state.jobs).toEqual([]);
+    expect(holder.state.stock.seeds).toBe(10);   // recipe still exists: inputs refunded
+    expect(screen.queryByTestId('orphan-jobs')).toBeNull();
+  });
+
+  it('a job whose recipe was deleted offers Remove (no refund) instead of Finish', () => {
+    vi.stubGlobal('confirm', () => true);
+    const holder = live({}, [job('j1', { recipeId: 'deleted' })]);
+    const row = screen.getByTestId('slot-field-0');
+    expect(within(row).queryByRole('button', { name: 'Finish' })).toBeNull();
+    expect(within(row).getByText(/recipe deleted/)).toBeTruthy();
+    fireEvent.click(within(row).getByRole('button', { name: 'Remove' }));
+    vi.unstubAllGlobals();
+    expect(holder.state.jobs).toEqual([]);
+    expect(holder.state.stock).toEqual({});
   });
 });

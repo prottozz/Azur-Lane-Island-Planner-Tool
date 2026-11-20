@@ -1,6 +1,14 @@
 import { addStock } from '../../shared/actions';
-import type { Expansion } from '../../shared/planner/expand';
+import type { Expansion, Purchase } from '../../shared/planner/expand';
+import type { State } from '../../shared/types';
 import { useApp } from '../useAppState';
+
+/** Adds the purchase to stock and, when a money balance is tracked and it was bought with money, deducts its cost. */
+export function bought(s: State, p: Purchase): State {
+  const next = addStock(s, [{ item: p.item, qty: p.qty }]);
+  if (s.settings.money === null || p.currency !== 'money') return next;
+  return { ...next, settings: { ...next.settings, money: s.settings.money - p.cost } };
+}
 
 export function Shortfalls({ expansion }: { expansion: Expansion }) {
   const { gd, apply } = useApp();
@@ -41,7 +49,7 @@ export function Shortfalls({ expansion }: { expansion: Expansion }) {
             {expansion.purchases.map(p => (
               <li key={`${p.item}:${p.currency}`} data-testid={`purchase-${p.item}`}>
                 {name(p.item)} × {p.qty} — {p.cost} {p.currency}{' '}
-                <button className="small" onClick={() => apply(s => addStock(s, [{ item: p.item, qty: p.qty }]))}>Bought</button>
+                <button className="small" onClick={() => apply(s => bought(s, p))}>Bought</button>
               </li>
             ))}
           </ul>

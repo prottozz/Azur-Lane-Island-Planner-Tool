@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { Priority, Qty } from '../../shared/types';
 import { collectSpawns, finishJob, readyJobs, spawnsAvailable } from '../../shared/actions';
-import { useApp } from '../useAppState';
+import { hhmm } from '../../shared/time';
+import { useApp, useNow } from '../useAppState';
+import { CommitInput } from './CommitInput';
 
 const PRIORITIES: { id: Priority; label: string }[] = [
   { id: 'money', label: 'Money' },
@@ -10,14 +12,19 @@ const PRIORITIES: { id: Priority; label: string }[] = [
 ];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function numOrNull(v: string): number | null {
-  if (v.trim() === '') return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+/** Blank → null (not tracked); otherwise a number of at least zero. */
+function parseOptionalAmount(raw: string, what: string): { ok: true; value: number | null } | { ok: false; error: string } {
+  const t = raw.trim();
+  if (t === '') return { ok: true, value: null };
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? { ok: true, value: n } : { ok: false, error: `${what} must be a number, zero or more, or blank` };
 }
 
+const TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+
 export function Header() {
-  const { gd, state, now, warnings, apply, undo, canUndo, saveError } = useApp();
+  const { gd, state, warnings, apply, undo, canUndo, saveError } = useApp();
+  const now = useNow();
   const { settings } = state;
   const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +33,12 @@ export function Header() {
 
   const run = (fn: Parameters<typeof apply>[0]) => setError(apply(fn));
   const setSettings = (patch: Partial<typeof settings>) => run(s => ({ ...s, settings: { ...s.settings, ...patch } }));
+  /** For CommitInput: applies the patch and returns an error (shown inline), or null. */
+  const commitSettings = (patch: Partial<typeof settings>) => apply(s => ({ ...s, settings: { ...s.settings, ...patch } }));
+  const amountField = (key: 'money' | 'moneyTarget', what: string) => (raw: string) => {
+    const p = parseOptionalAmount(raw, what);
+    return p.ok ? commitSettings({ [key]: p.value }) : p.error;
+  };
 
   const ready = readyJobs(state, now);
   const spawnsReady = spawnsAvailable(state, gd, now);
@@ -81,6 +94,7 @@ export function Header() {
 
       <div className="header-row">
         <h1>Island Planner</h1>
+        <span className="clock" data-testid="clock" title="Current time">{hhmm(now)}</span>
         <fieldset className="priority">
           <legend>Priority</legend>
           {PRIORITIES.map(p => (
@@ -95,10 +109,10 @@ export function Header() {
 
       <div className="header-row">
         <label>Money
-          <input type="number" min={0} value={settings.money ?? ''} onChange={e => setSettings({ money: numOrNull(e.target.value) })} />
+          <CommitInput numeric label="Money" value={settings.money === null ? '' : String(settings.money)} onCommit={amountField('money', 'Money')} />
         </label>
         <label>Target
-          <input type="number" min={0} value={settings.moneyTarget ?? ''} onChange={e => setSettings({ moneyTarget: numOrNull(e.target.value) })} />
+          <CommitInput numeric label="Target" value={settings.moneyTarget === null ? '' : String(settings.moneyTarget)} onCommit={amountField('moneyTarget', 'Target')} />
         </label>
         {settings.moneyTarget !== null && settings.moneyTarget > 0 && (
           <progress aria-label="Money progress" value={progress} max={settings.moneyTarget} />
@@ -108,10 +122,16 @@ export function Header() {
 
       <div className="header-row">
         <label>Season
-          <input type="number" min={1} value={settings.season} onChange={e => { const n = Number(e.target.value); if (Number.isInteger(n) && n > 0) setSettings({ season: n }); }} />
+          <CommitInput numeric label="Season" value={String(settings.season)} onCommit={raw => {
+            const t = raw.trim();
+            return /^\d+$/.test(t) && Number(t) > 0 ? commitSettings({ season: Number(t) }) : 'Season must be a whole number of at least 1';
+          }} />
         </label>
         <label>Daily reset
-          <input type="time" value={settings.resetTime} onChange={e => { if (e.target.value) setSettings({ resetTime: e.target.value }); }} />
+          <CommitInput label="Daily reset" value={settings.resetTime} onCommit={raw => {
+            const m = TIME_RE.exec(raw.trim());
+            return m ? commitSettings({ resetTime: `${m[1].padStart(2, '0')}:${m[2]}` }) : 'Daily reset must be a time like 05:00';
+          }} />
         </label>
         <label>Weekly reset
           <select value={settings.weeklyResetDay} onChange={e => setSettings({ weeklyResetDay: Number(e.target.value) })}>

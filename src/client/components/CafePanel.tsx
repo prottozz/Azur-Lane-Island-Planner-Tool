@@ -2,7 +2,14 @@ import { useState } from 'react';
 import { finishCafeRun, startCafeRun } from '../../shared/actions';
 import type { Cafe, CafePlan, CafeRun, Qty } from '../../shared/types';
 import { runningRun, startedAtLabel, todaysRun } from '../cafeRuns';
-import { useApp } from '../useAppState';
+import { useApp, useNow } from '../useAppState';
+
+/** Keeps a typed leftover within 0..sent; other text is left for finishCafeRun to reject. */
+function clampLeftover(raw: string, sent: number): string {
+  const n = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(n)) return raw;
+  return String(Math.min(sent, Math.max(0, n)));
+}
 
 function FinishForm({ run, cafeName }: { run: CafeRun; cafeName: string }) {
   const { gd, apply } = useApp();
@@ -23,8 +30,8 @@ function FinishForm({ run, cafeName }: { run: CafeRun; cafeName: string }) {
       {run.dishes.map(d => (
         <label key={d.item}>
           Leftover {name(d.item)}{' '}
-          <input type="number" min={0} step={1} aria-label={`Leftover ${name(d.item)}`}
-            value={leftovers[d.item] ?? '0'} onChange={e => setLeftovers({ ...leftovers, [d.item]: e.target.value })} />
+          <input type="number" min={0} max={d.qty} step={1} aria-label={`Leftover ${name(d.item)}`}
+            value={leftovers[d.item] ?? '0'} onChange={e => setLeftovers({ ...leftovers, [d.item]: clampLeftover(e.target.value, d.qty) })} />
         </label>
       ))}
       <label>
@@ -38,7 +45,8 @@ function FinishForm({ run, cafeName }: { run: CafeRun; cafeName: string }) {
 }
 
 function CafeCard({ cafe }: { cafe: Cafe }) {
-  const { gd, state, now, apply } = useApp();
+  const { gd, state, apply } = useApp();
+  const now = useNow();
   const [error, setError] = useState<string | null>(null);
   const name = (id: string) => gd.items[id]?.name ?? id;
 

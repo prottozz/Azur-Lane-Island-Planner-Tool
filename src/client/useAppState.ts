@@ -12,18 +12,24 @@ const SAVE_RETRY_MS = 5_000;
 const NOW_TICK_MS = 30_000;
 const RESET_TICK_MS = 60_000;
 const MAX_UNDO = 50;
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-interface Snapshot { state: State; gd: GameData }
+export interface Snapshot { state: State; gd: GameData }
 
+/**
+ * App data and actions. The current time is not here (see useNow), so components that only read data do not
+ * re-render on the clock tick. `plan` is recomputed on every data change and whenever a running job becomes ready.
+ */
 export interface AppState {
   gd: GameData;
   state: State;
   plan: Plan;
-  now: Date;
   warnings: string[];
   /** Run a transition; returns an error message, or null on success. */
   apply(fn: (s: State, gd: GameData) => Result<State> | State): string | null;
   applyGameData(fn: (gd: GameData) => Result<GameData> | GameData): string | null;
+  /** Change state and game data together as one undo entry. */
+  applyAll(fn: (s: State, gd: GameData) => Result<Snapshot> | Snapshot): string | null;
   undo(): void;
   canUndo: boolean;
   /** Message of the last failed save, or null. Local state is kept and the save is retried every 5 s and on the next change. */
@@ -43,7 +49,8 @@ function errorMessage(e: unknown): string {
 
 export function useAppState(): AppState {
   const [data, setData] = useState<Snapshot | null>(null);
-  const [now, setNow] = useState(() => new Date());
+  /** Bumped when the next running job reaches its end time, so the plan sees it as ready. */
+  const [planClock, setPlanClock] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [canUndo, setCanUndo] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -130,11 +137,6 @@ export function useAppState(): AppState {
   }, [loadAttempt, scheduleSave]);
 
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), NOW_TICK_MS);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
     const id = setInterval(() => {
       const cur = dataRef.current;
       if (!cur) return;
@@ -183,6 +185,19 @@ export function useAppState(): AppState {
     return null;
   }, [commit]);
 
+  const applyAll = useCallback((fn: (s: State, gd: GameData) => Result<Snapshot> | Snapshot): string | null => {
+    const cur = dataRef.current;
+    if (!cur) return 'Data is not loaded yet';
+    const r = fn(cur.state, cur.gd);
+    if (isResult(r)) {
+      if (!r.ok) return r.error;
+      commit(r.value, { undoable: true });
+    } else {
+      commit(r, { undoable: true });
+    }
+    return null;
+  }, [commit]);
+
   const undo = useCallback(() => {
     const prev = history.current[history.current.length - 1];
     if (!prev) return;
@@ -194,15 +209,44 @@ export function useAppState(): AppState {
   const fallback = useMemo(() => ({ gd: emptyGameData(), state: emptyState(new Date()) }), []);
   const gd = data?.gd ?? fallback.gd;
   const state = data?.state ?? fallback.state;
-  const plan = useMemo(() => buildPlan(gd, state, now), [gd, state, now]);
 
-  return {
-    gd, state, plan, now, warnings, apply, applyGameData, undo, canUndo, saveError,
-    loaded: data !== null, loadError, retryLoad: () => setLoadAttempt(n => n + 1),
-  };
+  // Wake up when the next running job ends: readiness is the only way the plan depends on the time.
+  useEffect(() => {
+    const t = Date.now();
+    const next = Math.min(...state.jobs.map(j => Date.parse(j.endsAt)).filter(e => e > t));
+    if (!Number.isFinite(next)) return;
+    const id = setTimeout(() => setPlanClock(n => n + 1), Math.min(next - t + 50, MAX_TIMEOUT_MS));
+    return () => clearTimeout(id);
+  }, [state, planClock]);
+  // planClock is a dependency only to re-run the plan at the current time once a job becomes ready.
+  const plan = useMemo(() => buildPlan(gd, state, new Date()), [gd, state, planClock]);
+  const retryLoad = useCallback(() => setLoadAttempt(n => n + 1), []);
+  const loaded = data !== null;
+
+  return useMemo(() => ({
+    gd, state, plan, warnings, apply, applyGameData, applyAll, undo, canUndo, saveError, loaded, loadError, retryLoad,
+  }), [gd, state, plan, warnings, apply, applyGameData, applyAll, undo, canUndo, saveError, loaded, loadError, retryLoad]);
 }
 
 export const AppStateContext = createContext<AppState | null>(null);
+
+/** The current time, ticking every 30 s. Only components that show or compare times read it. */
+export const NowContext = createContext<Date | null>(null);
+
+export function NowProvider({ children }: { children: ReactNode }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), NOW_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+  return createElement(NowContext.Provider, { value: now }, children);
+}
+
+export function useNow(): Date {
+  const now = useContext(NowContext);
+  if (!now) throw new Error('useNow must be used inside a NowProvider');
+  return now;
+}
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const app = useAppState();
@@ -214,7 +258,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   } else if (!app.loaded) {
     body = createElement('p', { className: 'status' }, 'Loading…');
   }
-  return createElement(AppStateContext.Provider, { value: app }, body);
+  return createElement(AppStateContext.Provider, { value: app }, createElement(NowProvider, null, body));
 }
 
 export function useApp(): AppState {

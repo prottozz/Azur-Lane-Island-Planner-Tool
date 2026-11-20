@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GoodsPanel } from '../../src/client/components/GoodsPanel';
 import { GoodsTab } from '../../src/client/tabs/GoodsTab';
-import { AppStateContext } from '../../src/client/useAppState';
+import { AppStateContext, NowContext } from '../../src/client/useAppState';
 import type { AppState } from '../../src/client/useAppState';
 import { emptyGameData, emptyState } from '../../src/shared/defaults';
 import { buildPlan } from '../../src/shared/planner/suggest';
@@ -44,7 +44,7 @@ function makeHolder(over: Partial<State> = {}): Holder {
 function Harness({ holder, children }: { holder: Holder; children: React.ReactNode }) {
   const [state, setState] = useState(holder.state);
   const app: AppState = {
-    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), now: NOW, warnings: [],
+    gd: holder.gd, state, plan: buildPlan(holder.gd, state, NOW), warnings: [],
     apply(fn: (s: State, gd: GameData) => Result<State> | State) {
       const r = fn(holder.state, holder.gd);
       if ('ok' in r && typeof r.ok === 'boolean') {
@@ -54,9 +54,9 @@ function Harness({ holder, children }: { holder: Holder; children: React.ReactNo
       setState(holder.state);
       return null;
     },
-    applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+    applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
   };
-  return <AppStateContext.Provider value={app}>{children}</AppStateContext.Provider>;
+  return <AppStateContext.Provider value={app}><NowContext.Provider value={NOW}>{children}</NowContext.Provider></AppStateContext.Provider>;
 }
 
 afterEach(cleanup);
@@ -124,12 +124,15 @@ describe('GoodsTab', () => {
     expect(screen.getByTestId('idp-progress').textContent).not.toContain('/');
     expect(screen.queryByLabelText('IDP progress')).toBeNull();
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '1000' } });
+    expect(holder.state.idp.target).toBeNull();                         // nothing until blur/Enter
+    fireEvent.keyDown(screen.getByLabelText('IDP target'), { key: 'Enter' });
     expect(holder.state.idp.target).toBe(1000);
     expect(screen.getByTestId('idp-progress').textContent).toContain('IDP: 620 / 1000');
     const bar = screen.getByLabelText('IDP progress') as HTMLProgressElement;
     expect(bar.max).toBe(1000);
     expect(bar.value).toBe(620);
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '' } });
+    fireEvent.blur(screen.getByLabelText('IDP target'));
     expect(holder.state.idp.target).toBeNull();
   });
 
@@ -137,15 +140,20 @@ describe('GoodsTab', () => {
     const holder = makeHolder();
     let fail = true;
     const app: AppState = {
-      gd: holder.gd, state: holder.state, plan: buildPlan(holder.gd, holder.state, NOW), now: NOW, warnings: [],
+      gd: holder.gd, state: holder.state, plan: buildPlan(holder.gd, holder.state, NOW), warnings: [],
       apply: () => (fail ? 'cannot save target' : null),
-      applyGameData: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
+      applyGameData: () => null, applyAll: () => null, undo: () => {}, canUndo: false, saveError: null, loaded: true, loadError: null, retryLoad: () => {},
     };
-    render(<AppStateContext.Provider value={app}><GoodsTab /></AppStateContext.Provider>);
+    render(<AppStateContext.Provider value={app}><NowContext.Provider value={NOW}><GoodsTab /></NowContext.Provider></AppStateContext.Provider>);
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '500' } });
+    fireEvent.blur(screen.getByLabelText('IDP target'));
     expect(screen.getByRole('alert').textContent).toBe('cannot save target');
     fail = false;
     fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '600' } });
+    fireEvent.blur(screen.getByLabelText('IDP target'));
     expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.change(screen.getByLabelText('IDP target'), { target: { value: '1.5' } });
+    fireEvent.blur(screen.getByLabelText('IDP target'));
+    expect(screen.getByRole('alert').textContent).toMatch(/whole number/);
   });
 });
