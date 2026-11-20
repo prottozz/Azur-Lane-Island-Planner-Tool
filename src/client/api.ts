@@ -15,14 +15,24 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-function put(url: string, value: unknown): Promise<unknown> {
-  return request(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+/** Browsers refuse keepalive requests whose bodies exceed 64 KiB in total; stay under that. */
+export const KEEPALIVE_MAX_BYTES = 60_000;
+
+export interface PutOptions {
+  /** Let the request outlive the page (used on pagehide); ignored for bodies over KEEPALIVE_MAX_BYTES. */
+  keepalive?: boolean;
+}
+
+function put(url: string, value: unknown, opts: PutOptions = {}): Promise<unknown> {
+  const body = JSON.stringify(value);
+  const keepalive = opts.keepalive === true && new Blob([body]).size <= KEEPALIVE_MAX_BYTES;
+  return request(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, ...(keepalive ? { keepalive } : {}) });
 }
 
 export const api = {
   getGameData: () => request<GameData>('/api/gamedata'),
   getState: () => request<State>('/api/state'),
-  putGameData: (gd: GameData) => put('/api/gamedata', gd),
-  putState: (s: State) => put('/api/state', s),
+  putGameData: (gd: GameData, opts?: PutOptions) => put('/api/gamedata', gd, opts),
+  putState: (s: State, opts?: PutOptions) => put('/api/state', s, opts),
   getWarnings: async (): Promise<string[]> => (await request<{ warnings: string[] }>('/api/health')).warnings,
 };

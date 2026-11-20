@@ -8,6 +8,7 @@ import type { Plan } from '../shared/planner/suggest';
 import { api } from './api';
 
 const SAVE_DEBOUNCE_MS = 300;
+const SAVE_RETRY_MS = 5_000;
 const NOW_TICK_MS = 30_000;
 const RESET_TICK_MS = 60_000;
 const MAX_UNDO = 50;
@@ -25,7 +26,7 @@ export interface AppState {
   applyGameData(fn: (gd: GameData) => Result<GameData> | GameData): string | null;
   undo(): void;
   canUndo: boolean;
-  /** Message of the last failed save, or null. Local state is kept and retried on the next change. */
+  /** Message of the last failed save, or null. Local state is kept and the save is retried every 5 s and on the next change. */
   saveError: string | null;
   loaded: boolean;
   loadError: string | null;
@@ -53,21 +54,37 @@ export function useAppState(): AppState {
   const history = useRef<Snapshot[]>([]);
   const dirty = useRef({ state: false, gd: false });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** At most one flush (so at most one PUT per file) is in flight; a flush requested meanwhile runs after it. */
+  const inFlight = useRef(false);
+  const flushAgain = useRef(false);
 
-  const flush = useCallback(async () => {
-    timer.current = null;
+  const flush = useCallback(async (opts: { keepalive?: boolean } = {}): Promise<void> => {
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    if (inFlight.current) { flushAgain.current = true; return; }
     const cur = dataRef.current;
-    if (!cur) return;
+    if (!cur || (!dirty.current.state && !dirty.current.gd)) return;
+    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null; }
+    inFlight.current = true;
     const sent = { state: dirty.current.state ? cur.state : null, gd: dirty.current.gd ? cur.gd : null };
+    // The fetches start synchronously, before the first await (pagehide relies on this).
     const results = await Promise.all([
-      sent.state ? api.putState(sent.state).then(() => null, (e: unknown) => errorMessage(e)) : null,
-      sent.gd ? api.putGameData(sent.gd).then(() => null, (e: unknown) => errorMessage(e)) : null,
+      sent.state ? api.putState(sent.state, opts).then(() => null, (e: unknown) => errorMessage(e)) : null,
+      sent.gd ? api.putGameData(sent.gd, opts).then(() => null, (e: unknown) => errorMessage(e)) : null,
     ]);
+    inFlight.current = false;
     const [stateErr, gdErr] = results;
     // A value is clean only if its PUT succeeded and nothing newer arrived meanwhile.
     if (sent.state && stateErr === null && dataRef.current?.state === sent.state) dirty.current.state = false;
     if (sent.gd && gdErr === null && dataRef.current?.gd === sent.gd) dirty.current.gd = false;
-    setSaveError(stateErr ?? gdErr ?? null);
+    const err = stateErr ?? gdErr ?? null;
+    setSaveError(err);
+    if (flushAgain.current) {
+      flushAgain.current = false;
+      void flush();
+    } else if (err) {
+      retryTimer.current = setTimeout(() => { retryTimer.current = null; void flush(); }, SAVE_RETRY_MS);
+    }
   }, []);
 
   const scheduleSave = useCallback(() => {
@@ -127,7 +144,18 @@ export function useAppState(): AppState {
     return () => clearInterval(id);
   }, [commit]);
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // Closing or navigating away: send pending changes now, with keepalive so the request outlives the page.
+  // If a PUT is already in flight, the newer value is not sent alongside it (one PUT per file at a time).
+  useEffect(() => {
+    const onPageHide = () => { void flush({ keepalive: true }); };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [flush]);
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (retryTimer.current) clearTimeout(retryTimer.current);
+  }, []);
 
   const apply = useCallback((fn: (s: State, gd: GameData) => Result<State> | State): string | null => {
     const cur = dataRef.current;

@@ -71,7 +71,7 @@ export function Header() {
           <button onClick={() => setDismissed(true)}>Dismiss</button>
         </div>
       )}
-      {saveError && <div className="banner error" role="alert">Save failed: {saveError}. Changes are kept here and will be retried on your next edit.</div>}
+      {saveError && <div className="banner error" role="alert">Save failed: {saveError}. Changes are kept here; retrying every 5 seconds.</div>}
       {error && (
         <div className="banner error" role="alert">
           <div>{error}</div>

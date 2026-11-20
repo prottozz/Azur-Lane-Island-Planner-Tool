@@ -11,6 +11,8 @@ export interface AppOptions {
   basicAuth?: string;
   /** Seed file copied to gamedata.json on first run (see seedIfEmpty). */
   seedPath?: string;
+  /** Built client to serve; defaults to <repo>/dist. */
+  distDir?: string;
 }
 
 /** Copies seedPath to <dataDir>/gamedata.json only if that file does not exist. A missing seed file is silently skipped. */
@@ -91,9 +93,13 @@ export function createApp(dataDir: string, opts: AppOptions = {}): express.Expre
     res.status(404).json({ ok: false, error: 'Not found' });
   });
 
-  const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+  const dist = opts.distDir ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
   if (fs.existsSync(dist)) {
     app.use(express.static(dist));
+    // A missing hashed asset (stale tab after a rebuild) must 404, not get index.html as JavaScript.
+    app.use('/assets', (_req, res) => {
+      res.status(404).type('text/plain').send('Not found');
+    });
     app.get(/.*/, (_req, res) => {
       res.sendFile(path.join(dist, 'index.html'));
     });

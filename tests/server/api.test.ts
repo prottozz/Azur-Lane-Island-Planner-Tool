@@ -128,3 +128,30 @@ describe('basic auth', () => {
     }
   });
 });
+
+describe('static client', () => {
+  const makeDist = () => {
+    const dist = path.join(dir, 'dist');
+    fs.mkdirSync(path.join(dist, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(dist, 'index.html'), '<!doctype html><title>app</title>');
+    fs.writeFileSync(path.join(dist, 'assets', 'index-abc.js'), 'console.log(1)');
+    return dist;
+  };
+
+  it('serves existing assets and falls back to index.html for app routes', async () => {
+    const app = createApp(path.join(dir, 'data'), { distDir: makeDist() });
+    const asset = await request(app).get('/assets/index-abc.js');
+    expect(asset.status).toBe(200);
+    expect(asset.text).toBe('console.log(1)');
+    const page = await request(app).get('/some/route');
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('<title>app</title>');
+  });
+
+  it('returns 404 for a missing file under /assets/ instead of index.html', async () => {
+    const app = createApp(path.join(dir, 'data'), { distDir: makeDist() });
+    const r = await request(app).get('/assets/index-old.js');
+    expect(r.status).toBe(404);
+    expect(r.text).not.toContain('<title>app</title>');
+  });
+});
