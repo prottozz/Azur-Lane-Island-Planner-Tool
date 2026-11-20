@@ -7,6 +7,7 @@ export interface SiteSource { items: any; places: any; restaurants: any; shops: 
 
 const SEEDS_SHOP = '10109';
 const FLOUR_MILL_SHOP = '10019';
+const MILL_MAX_RUNS = 999;
 
 function kindOf(placeId: number): BuildingKind {
   if (placeId === 101) return 'field';
@@ -91,7 +92,8 @@ export function mapSite(src: SiteSource, _season: number): GameData {
         const id = `mill-${good.id}`;
         gd.recipes[id] = {
           id, buildingId: 'mill', inputs: qtys([good.cost]), outputs: qtys(good.gains), bonus: [],
-          maxRuns: 1, secondsPerRun: 1, stamina: 0, season: 'permanent', active: true,
+          // The mill converts instantly and as often as you like: a large run cap keeps one job enough for any demand.
+          maxRuns: MILL_MAX_RUNS, secondsPerRun: 1, stamina: 0, season: 'permanent', active: true,
         };
       }
     }

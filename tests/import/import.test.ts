@@ -66,7 +66,7 @@ describe('mapSite', () => {
   it('maps the flour mill goods', () => {
     expect(gd.buildings['mill']).toMatchObject({ kind: 'mill', slots: 1 });
     expect(gd.recipes['mill-7']).toMatchObject({
-      buildingId: 'mill', inputs: [{ item: '1001', qty: 3 }], outputs: [{ item: '1004', qty: 2 }], maxRuns: 1, secondsPerRun: 1,
+      buildingId: 'mill', inputs: [{ item: '1001', qty: 3 }], outputs: [{ item: '1004', qty: 2 }], maxRuns: 999, secondsPerRun: 1,
     });
   });
 
