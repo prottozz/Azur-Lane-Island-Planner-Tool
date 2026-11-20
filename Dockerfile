@@ -1,4 +1,6 @@
-FROM node:22-alpine AS build
+# Build once on the runner's native platform: the output (static files + bundled JS) is CPU-independent,
+# so npm never runs under QEMU emulation (arm64 npm ci crashed there).
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
