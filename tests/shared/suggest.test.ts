@@ -55,9 +55,20 @@ describe('demand', () => {
     expect(cafeDemand(g, s)).toEqual([{ item: 'tofu', qty: 6 }, { item: 'cake', qty: 6 }, { item: 'd1', qty: 6 }]);
   });
 
-  it('cafeDemand ignores plans for unknown cafés or ranks', () => {
-    const s = state({ cafePlans: [{ cafeId: 'nope', rankIndex: 0, dishes: ['tofu'] }, { cafeId: 'cafe1', rankIndex: 5, dishes: ['tofu'] }] });
-    expect(cafeDemand(fixture(), s)).toEqual([]);
+  it('cafeDemand ignores plans for unknown cafés and cafés without ranks', () => {
+    const g = fixture();
+    g.cafes.bare = { ...g.cafes.cafe1, id: 'bare', ranks: [] };
+    const s = state({ cafePlans: [{ cafeId: 'nope', rankIndex: 0, dishes: ['tofu'] }, { cafeId: 'bare', rankIndex: 0, dishes: ['tofu'] }] });
+    expect(cafeDemand(g, s)).toEqual([]);
+  });
+
+  it('cafeDemand clamps an out-of-range rankIndex to the first rank, like the café panel', () => {
+    const g = fixture();
+    g.cafes.cafe1.ranks = [{ name: 'R1', dishSlots: 1, capacityPerDish: 4 }, { name: 'R2', dishSlots: 2, capacityPerDish: 9 }];
+    const s = (rankIndex: number) => state({ cafePlans: [{ cafeId: 'cafe1', rankIndex, dishes: ['tofu', 'cake'] }] });
+    expect(cafeDemand(g, s(5))).toEqual([{ item: 'tofu', qty: 4 }]);
+    expect(cafeDemand(g, s(-1))).toEqual([{ item: 'tofu', qty: 4 }]);
+    expect(cafeDemand(g, s(1))).toEqual([{ item: 'tofu', qty: 9 }, { item: 'cake', qty: 9 }]);
   });
 
   it('reservedDemand sums reservations by item', () => {
@@ -222,3 +233,112 @@ describe('buildPlan', () => {
     expect(at(idp, 'factory')).toMatchObject({ recipeId: 'r_jam', runs: 10 });
   });
 });
+
+describe('suggestions against on-hand stock (waitingFor)', () => {
+  const withSoyField = () => {
+    const g = fixture();
+    g.buildings.soyField = building('soyField', 'Soy Field', 'field', 'food', 1);
+    g.recipes.r_soy = recipe('r_soy', 'soyField', [['seeds', 1]], [['soy', 10]]);
+    return g;
+  };
+  const soyJob = (id: string, runs: number, endsMin: number, buildingId = 'soyField') =>
+    ({ id, buildingId, slot: 0, recipeId: 'r_soy', runs, startedAt: iso(-60), endsAt: iso(endsMin) });
+  const tofuPlan = { cafePlans: [{ cafeId: 'cafe1', rankIndex: 0, dishes: ['tofu'] }] };
+  const koi = (g: GameData, s: State) => buildPlan(g, s, now).suggestions.find(x => x.buildingId === 'koi')!;
+
+  it('a Tofu suggestion fed by a running soy job waits for the soy instead of claiming it is in stock', () => {
+    const g = withSoyField();
+    const sug = koi(g, state({ ...tofuPlan, jobs: [soyJob('j', 10, 30)] }));
+    expect(sug).toMatchObject({ recipeId: 'r_tofu', runs: 6, missing: [], waitingFor: [{ item: 'soy', qty: 90, readyAt: iso(30) }] });
+  });
+
+  it('after the soy job finishes the same suggestion has nothing missing or waiting', () => {
+    const g = withSoyField();
+    const sug = koi(g, state({ ...tofuPlan, stock: { soy: 100 } }));
+    expect(sug).toMatchObject({ recipeId: 'r_tofu', runs: 6, missing: [] });
+    expect(sug.waitingFor).toBeUndefined();
+  });
+
+  it('only the part not on hand waits; on-hand stock is used first', () => {
+    const g = withSoyField();
+    const sug = koi(g, state({ ...tofuPlan, stock: { soy: 30 }, jobs: [soyJob('j', 10, 30)] }));
+    expect(sug).toMatchObject({ runs: 6, missing: [], waitingFor: [{ item: 'soy', qty: 60, readyAt: iso(30) }] });
+  });
+
+  it('splits a shortfall into what running jobs cover and what is truly missing', () => {
+    const g = withSoyField();
+    const sug = koi(g, state({ ...tofuPlan, jobs: [soyJob('j', 1, 30)] }));
+    expect(sug).toMatchObject({ runs: 6, missing: [{ item: 'soy', qty: 80 }], waitingFor: [{ item: 'soy', qty: 10, readyAt: iso(30) }] });
+  });
+
+  it('readyAt is the latest end time among the jobs needed to cover the wait', () => {
+    const g = withSoyField();
+    g.buildings.soyField.slots = 2;
+    const jobs = [{ ...soyJob('late', 5, 50), slot: 1 }, soyJob('early', 5, 10)];
+    expect(koi(g, state({ ...tofuPlan, jobs })).waitingFor).toEqual([{ item: 'soy', qty: 90, readyAt: iso(50) }]);
+    g.cafes.cafe1.ranks[0].capacityPerDish = 3;   // 45 soy: the early job alone covers it
+    expect(koi(g, state({ ...tofuPlan, jobs })).waitingFor).toEqual([{ item: 'soy', qty: 45, readyAt: iso(10) }]);
+  });
+
+  it('an idle factory making the best IDP/h good from running outputs waits for them', () => {
+    const g = fixture();
+    g.buildings.flaxField = building('flaxField', 'Flax Field', 'field', 'goods', 1);
+    g.recipes.r_flax.buildingId = 'flaxField';
+    const s = state({ stock: { flax: 60 }, jobs: [{ id: 'j', buildingId: 'flaxField', slot: 0, recipeId: 'r_flax', runs: 3, startedAt: iso(-5), endsAt: iso(20) }] }, 'idp');
+    const f = buildPlan(g, s, now).suggestions.find(x => x.buildingId === 'factory')!;
+    expect(f).toMatchObject({ recipeId: 'r_linen', runs: 12, missing: [] });
+    expect(f.waitingFor).toBeUndefined();
+    const s2 = { ...s, stock: { flax: 20 } };
+    expect(buildPlan(g, s2, now).suggestions.find(x => x.buildingId === 'factory'))
+      .toMatchObject({ recipeId: 'r_linen', runs: 10, missing: [], waitingFor: [{ item: 'flax', qty: 30, readyAt: iso(20) }] });
+  });
+});
+
+describe('reservations are planned', () => {
+  const res = (item: string, qty: number, source: 'request' | 'quest' = 'quest', id = item + source) => ({ id, item, qty, source });
+
+  it('a reserved factory good is produced in the goods pipeline with a reservation reason', () => {
+    const s = state({ stock: { flax: 100 }, reservations: [res('linen', 5)] }, 'money');
+    const p = buildPlan(fixture(), s, now);
+    expect(p.goods.steps).toContainEqual({ recipeId: 'r_linen', runs: 5, forItem: 'linen' });
+    expect(p.food.steps.some(st => st.forItem === 'linen')).toBe(false);
+    expect(p.suggestions.find(x => x.buildingId === 'factory')).toMatchObject({ recipeId: 'r_linen', runs: 5, reason: 'Reserved for quest: 5 Linen' });
+  });
+
+  it('a reserved dish is cooked in the food pipeline', () => {
+    const s = state({ stock: { soy: 100 }, reservations: [res('tofu', 3, 'request')] });
+    const p = buildPlan(fixture(), s, now);
+    expect(p.suggestions.find(x => x.buildingId === 'koi')).toMatchObject({ recipeId: 'r_tofu', runs: 3, reason: 'Reserved for request: 3 Tofu' });
+  });
+
+  it('a reserved item from a "both" building goes to food, or to goods under idp', () => {
+    const s = (priority: Priority) => state({ stock: { seeds: 3 }, reservations: [res('strawberry', 4)] }, priority);
+    expect(buildPlan(fixture(), s('money'), now).food.steps).toContainEqual({ recipeId: 'r_straw', runs: 1, forItem: 'strawberry' });
+    expect(buildPlan(fixture(), s('balanced'), now).food.steps.some(st => st.forItem === 'strawberry')).toBe(true);
+    const idp = buildPlan(fixture(), s('idp'), now);
+    expect(idp.goods.steps).toContainEqual({ recipeId: 'r_straw', runs: 1, forItem: 'strawberry' });
+    expect(idp.food.steps.some(st => st.forItem === 'strawberry')).toBe(false);
+  });
+
+  it('a reserved item with no producer surfaces in the food pipeline as a purchase or unobtainable', () => {
+    const g = fixture();
+    expect(buildPlan(g, state({ reservations: [res('seeds', 7)] }), now).food.unobtainable).toEqual([{ item: 'seeds', qty: 7 }]);
+    g.shop.push({ item: 'seeds', price: 2, currency: 'money', shop: 'Seeds' });
+    expect(buildPlan(g, state({ reservations: [res('seeds', 7)] }), now).food.purchases).toEqual([{ item: 'seeds', qty: 7, cost: 14, currency: 'money' }]);
+  });
+
+  it('plans only what stock plus running jobs do not already cover', () => {
+    const covered = buildPlan(fixture(), state({ stock: { tofu: 5, soy: 100 }, reservations: [res('tofu', 3)] }), now);
+    expect(covered.food.steps).toEqual([]);
+    const partly = buildPlan(fixture(), state({ stock: { tofu: 1, soy: 100 }, reservations: [res('tofu', 3), res('tofu', 2, 'request')] }), now);
+    expect(partly.food.steps).toEqual([{ recipeId: 'r_tofu', runs: 4, forItem: 'tofu' }]);
+    expect(partly.suggestions.find(x => x.buildingId === 'koi')!.reason).toBe('Reserved for quest/request: 5 Tofu');
+  });
+
+  it('freeStock still subtracts reservations, so reserved stock is not handed to other demand', () => {
+    const s = state({ stock: { soy: 100, tofu: 6 }, reservations: [res('tofu', 6)], cafePlans: [{ cafeId: 'cafe1', rankIndex: 0, dishes: ['tofu'] }] });
+    const p = buildPlan(fixture(), s, now);
+    expect(p.food.steps).toEqual([{ recipeId: 'r_tofu', runs: 6, forItem: 'tofu' }]);
+  });
+});
+

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { producersOf, consumersOf, derivePipeline, sharedItems, findReferences, deleteEntity, parsePaste } from '../../src/shared/gamedata';
+import { producersOf, consumersOf, derivePipeline, sharedItems, findReferences, deleteEntity, parsePaste, removeCafeRank } from '../../src/shared/gamedata';
 import type { GameData, Item, Building, Recipe, State } from '../../src/shared/types';
+import { emptyState } from '../../src/shared/defaults';
 
 const item = (id: string, name: string, extra: Partial<Item> = {}): Item =>
   ({ id, name, category: 'x', idp: null, cafeValue: null, season: 'permanent', active: true, ...extra });
@@ -200,5 +201,46 @@ describe('parsePaste', () => {
     expect(errors[2]).toMatch(/^row 5:/);
     expect(errors[3]).toMatch(/^row 6:.*maxRuns/);
     expect(errors).toHaveLength(4);
+  });
+});
+
+describe('removeCafeRank', () => {
+  const withCafe = (): GameData => ({
+    ...gd(),
+    cafes: {
+      c: { id: 'c', name: 'Café', kitchenBuildingId: 'koi', sellable: [], season: 'permanent', active: true,
+        ranks: ['A', 'B', 'C'].map(name => ({ name, dishSlots: 1, capacityPerDish: 1 })) },
+      other: { id: 'other', name: 'Other', kitchenBuildingId: 'koi', sellable: [], season: 'permanent', active: true,
+        ranks: ['A', 'B', 'C'].map(name => ({ name, dishSlots: 1, capacityPerDish: 1 })) },
+    },
+  });
+  const withPlans = (...plans: [string, number][]): State =>
+    ({ ...emptyState(new Date(2026, 0, 1)), cafePlans: plans.map(([cafeId, rankIndex]) => ({ cafeId, rankIndex, dishes: [] })) });
+  const indexAfter = (removed: number, planIndex: number) => {
+    const r = removeCafeRank(withCafe(), withPlans(['c', planIndex]), 'c', removed);
+    if (!r.ok) throw new Error(r.error);
+    return r.value.state.cafePlans[0].rankIndex;
+  };
+
+  it('removes the rank and shifts plan indices above it down', () => {
+    const r = removeCafeRank(withCafe(), withPlans(['c', 2], ['other', 2]), 'c', 0);
+    if (!r.ok) throw new Error(r.error);
+    expect(r.value.gd.cafes.c.ranks.map(k => k.name)).toEqual(['B', 'C']);
+    expect(r.value.state.cafePlans.map(p => p.rankIndex)).toEqual([1, 2]);
+  });
+
+  it('a plan on the removed rank keeps its index, clamped to the new last rank', () => {
+    expect(indexAfter(1, 1)).toBe(1);
+    expect(indexAfter(2, 2)).toBe(1);
+    expect(indexAfter(2, 0)).toBe(0);
+    expect(indexAfter(0, 9)).toBe(1);
+  });
+
+  it('refuses to remove the last remaining rank or a rank that does not exist', () => {
+    const g = withCafe();
+    g.cafes.c.ranks = g.cafes.c.ranks.slice(0, 1);
+    expect(removeCafeRank(g, withPlans(), 'c', 0)).toMatchObject({ ok: false, error: 'A café needs at least one rank' });
+    expect(removeCafeRank(withCafe(), withPlans(), 'c', 3).ok).toBe(false);
+    expect(removeCafeRank(withCafe(), withPlans(), 'nope', 0).ok).toBe(false);
   });
 });

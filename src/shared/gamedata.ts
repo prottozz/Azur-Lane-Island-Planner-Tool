@@ -118,6 +118,25 @@ export function deleteEntity(gd: GameData, s: State, ref: EntityRef): Result<Gam
   return { ok: true, value: { ...gd, [key]: rest } };
 }
 
+/**
+ * Removes rank `index` from a café and remaps café plans so they keep pointing at the same rank:
+ * indices above the removed one shift down; a plan on the removed rank clamps to the new last rank.
+ */
+export function removeCafeRank(gd: GameData, s: State, cafeId: string, index: number): Result<{ gd: GameData; state: State }> {
+  const cafe = gd.cafes[cafeId];
+  if (!cafe) return { ok: false, error: `Unknown café "${cafeId}"` };
+  if (!Number.isInteger(index) || index < 0 || index >= cafe.ranks.length) return { ok: false, error: `Rank ${index + 1} does not exist` };
+  if (cafe.ranks.length <= 1) return { ok: false, error: 'A café needs at least one rank' };
+  const ranks = cafe.ranks.filter((_, i) => i !== index);
+  const last = ranks.length - 1;
+  const remap = (i: number) => Math.max(0, Math.min(i > index ? i - 1 : i, last));
+  const cafePlans = s.cafePlans.map(p => (p.cafeId === cafeId && remap(p.rankIndex) !== p.rankIndex ? { ...p, rankIndex: remap(p.rankIndex) } : p));
+  return {
+    ok: true,
+    value: { gd: { ...gd, cafes: { ...gd.cafes, [cafeId]: { ...cafe, ranks } } }, state: { ...s, cafePlans } },
+  };
+}
+
 // ---- paste parsing ----
 
 function parseSeason(raw: string): Result<Item['season']> {

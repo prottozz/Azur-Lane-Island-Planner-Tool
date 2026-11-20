@@ -8,7 +8,7 @@ export interface Expansion { steps: PlanStep[]; purchases: Purchase[]; unobtaina
 const distinctInputs = (r: Recipe) => new Set(r.inputs.map(q => q.item)).size;
 
 /** Active recipes whose regular outputs include the item (bonus-only producers are ignored), best first. */
-function pickProducer(gd: GameData, item: ItemId): { recipe: Recipe; perRun: number } | null {
+export function pickProducer(gd: GameData, item: ItemId): { recipe: Recipe; perRun: number } | null {
   const candidates = producersOf(gd, item)
     .map(recipe => ({ recipe, perRun: recipe.outputs.filter(o => o.item === item).reduce((n, o) => n + o.qty, 0) }))
     .filter(c => c.perRun > 0);

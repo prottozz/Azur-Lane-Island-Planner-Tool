@@ -2,9 +2,17 @@ import type { Building, GameData, ItemId, Priority, Qty, Recipe, State } from '.
 import { fillJob, idpPerHour, jobInputs, jobOutputs } from '../recipes';
 import { readyJobs } from '../actions';
 import { sharedItems } from '../gamedata';
-import { expandDemand, type Expansion, type PlanStep } from './expand';
+import { expandDemand, pickProducer, type Expansion, type PlanStep } from './expand';
 
-export interface Suggestion { buildingId: string; slot: number; recipeId: string; runs: number; reason: string; missing: Qty[] }
+/** Inputs that running jobs will deliver; `readyAt` is the latest end time among the jobs that cover `qty`. */
+export interface WaitingFor { item: ItemId; qty: number; readyAt: string }
+/**
+ * `missing` and `waitingFor` are measured against on-hand stock (minus reservations): Start works only when both are empty.
+ * `missing` is what neither stock nor running jobs cover; `waitingFor` (omitted when empty) is what running jobs will cover.
+ */
+export interface Suggestion {
+  buildingId: string; slot: number; recipeId: string; runs: number; reason: string; missing: Qty[]; waitingFor?: WaitingFor[];
+}
 export interface RankedGood { recipeId: string; idpPerHour: number; feasibleRuns: number }
 export interface Plan { food: Expansion; goods: Expansion; suggestions: Suggestion[]; rankedGoods: RankedGood[] }
 
@@ -21,12 +29,15 @@ const qtyOf = (list: Qty[], item: ItemId) => list.reduce((n, q) => (q.item === i
 const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const itemName = (gd: GameData, item: ItemId) => gd.items[item]?.name ?? item;
 
-/** Each plan: the first dishSlots dishes × the rank's capacityPerDish, merged by item. */
+/**
+ * Each plan: the first dishSlots dishes × the rank's capacityPerDish, merged by item.
+ * An out-of-range rankIndex falls back to the first rank (as the café panel shows it); a café with no ranks is skipped.
+ */
 export function cafeDemand(gd: GameData, s: State): Qty[] {
   const out: Qty[] = [];
   for (const plan of s.cafePlans) {
     const cafe = gd.cafes[plan.cafeId];
-    const rank = cafe?.active ? cafe.ranks[plan.rankIndex] : undefined;
+    const rank = cafe?.active ? (cafe.ranks[plan.rankIndex] ?? cafe.ranks[0]) : undefined;
     if (!rank) continue;
     for (const dish of plan.dishes.slice(0, rank.dishSlots)) out.push({ item: dish, qty: rank.capacityPerDish });
   }
@@ -35,6 +46,50 @@ export function cafeDemand(gd: GameData, s: State): Qty[] {
 
 export function reservedDemand(s: State): Qty[] {
   return mergeQty(s.reservations.map(r => ({ item: r.item, qty: r.qty })));
+}
+
+/**
+ * Pipeline that plans a reserved item: the stored pipeline of its producer's building (food → food, goods → goods,
+ * both → food unless priority is idp). Items with no producer go to food (they surface as purchases or unobtainable).
+ */
+function reservationSide(gd: GameData, item: ItemId, priority: Priority): Side {
+  const producer = pickProducer(gd, item);
+  const pipeline = producer ? gd.buildings[producer.recipe.buildingId]?.pipeline : undefined;
+  if (pipeline === 'goods' || (pipeline === 'both' && priority === 'idp')) return 'goods';
+  return 'food';
+}
+
+/** Supply of each item: stock plus outputs of every unfinished job. */
+function supply(s: State, gd: GameData): Stock {
+  const out: Stock = { ...s.stock };
+  for (const job of s.jobs) {
+    const recipe = gd.recipes[job.recipeId];
+    if (recipe) for (const q of jobOutputs(recipe, job.runs)) out[q.item] = (out[q.item] ?? 0) + q.qty;
+  }
+  return out;
+}
+
+/** Reserved quantities that stock plus running jobs do not cover, split by the pipeline that should produce them. */
+export function reservationDemand(gd: GameData, s: State): Record<Side, Qty[]> {
+  const have = supply(s, gd);
+  const out: Record<Side, Qty[]> = { food: [], goods: [] };
+  for (const q of reservedDemand(s)) {
+    const short = q.qty - Math.max(0, have[q.item] ?? 0);
+    if (short > 0) out[reservationSide(gd, q.item, s.settings.priority)].push({ item: q.item, qty: short });
+  }
+  return out;
+}
+
+/** "Reserved for quest: 5 Linen" per reserved item (sources joined with "/" when mixed). */
+function reservationReasons(gd: GameData, s: State): Map<ItemId, string> {
+  const by = new Map<ItemId, { qty: number; sources: Set<string> }>();
+  for (const r of s.reservations) {
+    const cur = by.get(r.item) ?? { qty: 0, sources: new Set<string>() };
+    cur.qty += r.qty;
+    cur.sources.add(r.source);
+    by.set(r.item, cur);
+  }
+  return new Map([...by].map(([item, v]) => [item, `Reserved for ${[...v.sources].sort().join('/')}: ${v.qty} ${itemName(gd, item)}`]));
 }
 
 /** Active factory buildings with their best active recipe by IDP/h (ties by recipe id). */
@@ -56,17 +111,21 @@ export function goodsDemand(gd: GameData, _s: State): Qty[] {
     fillJob(recipe).map(q => ({ item: q.item, qty: q.qty * building.slots }))));
 }
 
-/** Stock plus outputs of every unfinished job, minus reservations, floored at 0. */
-export function freeStock(s: State, gd: GameData, _now: Date): Stock {
-  const free: Stock = { ...s.stock };
-  const add = (item: ItemId, qty: number) => { free[item] = (free[item] ?? 0) + qty; };
-  for (const job of s.jobs) {
-    const recipe = gd.recipes[job.recipeId];
-    if (recipe) for (const q of jobOutputs(recipe, job.runs)) add(q.item, q.qty);
-  }
-  for (const r of s.reservations) add(r.item, -r.qty);
+function minusReservations(s: State, base: Stock): Stock {
+  const free: Stock = { ...base };
+  for (const r of s.reservations) free[r.item] = (free[r.item] ?? 0) - r.qty;
   for (const item of Object.keys(free)) free[item] = Math.max(0, free[item]);
   return free;
+}
+
+/** Stock plus outputs of every unfinished job, minus reservations, floored at 0. */
+export function freeStock(s: State, gd: GameData, _now: Date): Stock {
+  return minusReservations(s, supply(s, gd));
+}
+
+/** On-hand stock minus reservations, floored at 0: what a job could actually be started with right now. */
+export function onHandStock(s: State): Stock {
+  return minusReservations(s, s.stock);
 }
 
 /**
@@ -112,11 +171,6 @@ class Budget {
     for (const q of mergeQty(r.inputs)) if (q.qty > 0) runs = Math.min(runs, Math.floor(this.have(side, q.item) / q.qty));
     return Math.max(0, runs);
   }
-  missing(side: Side, r: Recipe, runs: number): Qty[] {
-    return mergeQty(jobInputs(r, runs))
-      .map(q => ({ item: q.item, qty: q.qty - this.have(side, q.item) }))
-      .filter(q => q.qty > 0);
-  }
   spend(side: Side, r: Recipe, runs: number) {
     const sides: Side[] = ['food', 'goods'];
     for (const q of mergeQty(jobInputs(r, runs))) {
@@ -126,8 +180,16 @@ class Budget {
 }
 
 interface Ctx {
-  gd: GameData; free: Stock; foodDemand: Qty[]; goodsDemandList: Qty[];
-  topRecipes: Recipe[]; expansions: Record<Side, Expansion>; remaining: Map<PlanStep, number>; budget: Budget;
+  gd: GameData; free: Stock; cafeDemandList: Qty[]; goodsDemandList: Qty[];
+  reserved: Record<Side, Qty[]>; reservedReasons: Map<ItemId, string>;
+  topRecipes: Recipe[]; expansions: Record<Side, Expansion>; remaining: Map<PlanStep, number>;
+  /** Planning budget: stock + running-job outputs. */
+  budget: Budget;
+  /** On-hand budget: stock only; decides `missing` / `waitingFor`. */
+  onHand: Budget;
+  /** Running-job outputs per item, earliest end first, and how much of them suggestions already counted on. */
+  pending: Map<ItemId, { qty: number; endsAt: string }[]>;
+  pendingUsed: Map<ItemId, number>;
 }
 
 /** Idle slot indices: no job on the slot, or every job on it is ready. */
@@ -169,10 +231,48 @@ function consumerName(ctx: Ctx, side: Side, item: ItemId): string {
 }
 
 function stepReason(ctx: Ctx, side: Side, st: PlanStep): string {
-  const cafeQty = side === 'food' ? qtyOf(ctx.foodDemand, st.forItem) : 0;
+  const cafeQty = side === 'food' ? qtyOf(ctx.cafeDemandList, st.forItem) : 0;
   const name = itemName(ctx.gd, st.forItem);
   if (cafeQty > 0) return `Café needs ${cafeQty} ${name}; you have ${ctx.free[st.forItem] ?? 0}`;
+  if (qtyOf(ctx.reserved[side], st.forItem) > 0) return ctx.reservedReasons.get(st.forItem) ?? `Reserved: ${name}`;
   return `Feeds ${name} for ${consumerName(ctx, side, st.forItem)}`;
+}
+
+/** End time of the running job that brings the item's counted-on pending output up to `qty` more. */
+function pendingReadyAt(ctx: Ctx, item: ItemId, qty: number): string {
+  const jobs = ctx.pending.get(item) ?? [];
+  const target = (ctx.pendingUsed.get(item) ?? 0) + qty;
+  ctx.pendingUsed.set(item, target);
+  let cum = 0;
+  for (const j of jobs) {
+    cum += j.qty;
+    if (cum >= target) return j.endsAt;
+  }
+  return jobs[jobs.length - 1].endsAt;
+}
+
+/**
+ * Splits the job's input shortfall against on-hand stock into what running jobs will deliver (`waitingFor`)
+ * and what nothing covers (`missing`). Call before spending.
+ */
+function shortfallNow(ctx: Ctx, side: Side, r: Recipe, runs: number): Pick<Suggestion, 'missing' | 'waitingFor'> {
+  const missing: Qty[] = [];
+  const waitingFor: WaitingFor[] = [];
+  for (const q of mergeQty(jobInputs(r, runs))) {
+    const onHand = ctx.onHand.have(side, q.item);
+    const short = q.qty - onHand;
+    if (short <= 0) continue;
+    const pending = ctx.pending.has(q.item) ? Math.max(0, ctx.budget.have(side, q.item) - onHand) : 0;
+    const wait = Math.min(short, pending);
+    if (wait > 0) waitingFor.push({ item: q.item, qty: wait, readyAt: pendingReadyAt(ctx, q.item, wait) });
+    if (short > wait) missing.push({ item: q.item, qty: short - wait });
+  }
+  return waitingFor.length > 0 ? { missing, waitingFor } : { missing };
+}
+
+function spendBoth(ctx: Ctx, side: Side, r: Recipe, runs: number) {
+  ctx.budget.spend(side, r, runs);
+  ctx.onHand.spend(side, r, runs);
 }
 
 function suggestFromStep(ctx: Ctx, side: Side, b: Building, slot: number, st: PlanStep): Suggestion {
@@ -180,10 +280,10 @@ function suggestFromStep(ctx: Ctx, side: Side, b: Building, slot: number, st: Pl
   const needed = Math.min(ctx.remaining.get(st)!, recipe.maxRuns);
   const affordable = ctx.budget.affordable(side, recipe);
   const runs = affordable > 0 ? Math.min(needed, affordable) : needed;
-  const missing = affordable > 0 ? [] : ctx.budget.missing(side, recipe, runs);
-  ctx.budget.spend(side, recipe, runs);
+  const short = shortfallNow(ctx, side, recipe, runs);
+  spendBoth(ctx, side, recipe, runs);
   ctx.remaining.set(st, ctx.remaining.get(st)! - runs);
-  return { buildingId: b.id, slot, recipeId: recipe.id, runs, reason: stepReason(ctx, side, st), missing };
+  return { buildingId: b.id, slot, recipeId: recipe.id, runs, reason: stepReason(ctx, side, st), ...short };
 }
 
 function suggestBestGoods(ctx: Ctx, ranked: RankedGood[], b: Building, slot: number): Suggestion | null {
@@ -192,9 +292,10 @@ function suggestBestGoods(ctx: Ctx, ranked: RankedGood[], b: Building, slot: num
     if (recipe.buildingId !== b.id) continue;
     const runs = ctx.budget.affordable('goods', recipe);
     if (runs <= 0) continue;
-    ctx.budget.spend('goods', recipe, runs);
+    const short = shortfallNow(ctx, 'goods', recipe, runs);
+    spendBoth(ctx, 'goods', recipe, runs);
     const x = Math.round(g.idpPerHour * 10) / 10;
-    return { buildingId: b.id, slot, recipeId: recipe.id, runs, reason: `Best IDP/h you can make now (${x}/h)`, missing: [] };
+    return { buildingId: b.id, slot, recipeId: recipe.id, runs, reason: `Best IDP/h you can make now (${x}/h)`, ...short };
   }
   return null;
 }
@@ -244,11 +345,33 @@ function fillIdleFactories(ctx: Ctx, idle: IdleSlots, ranked: RankedGood[]): Sug
   return out;
 }
 
+/**
+ * Running-job outputs per item (earliest end first). Reservations beyond on-hand stock are counted against
+ * those outputs first, so `pendingUsed` starts there.
+ */
+function pendingOutputs(s: State, gd: GameData) {
+  const pending = new Map<ItemId, { qty: number; endsAt: string }[]>();
+  const jobs = [...s.jobs].sort((a, b) => Date.parse(a.endsAt) - Date.parse(b.endsAt));
+  for (const job of jobs) {
+    const recipe = gd.recipes[job.recipeId];
+    if (!recipe) continue;
+    for (const q of jobOutputs(recipe, job.runs)) pending.set(q.item, [...(pending.get(q.item) ?? []), { qty: q.qty, endsAt: job.endsAt }]);
+  }
+  const pendingUsed = new Map<ItemId, number>();
+  for (const q of reservedDemand(s)) {
+    const over = q.qty - Math.max(0, s.stock[q.item] ?? 0);
+    if (over > 0 && pending.has(q.item)) pendingUsed.set(q.item, over);
+  }
+  return { pending, pendingUsed };
+}
+
 export function buildPlan(gd: GameData, s: State, now: Date): Plan {
   const priority = s.settings.priority;
   const free = freeStock(s, gd, now);
-  const foodDemand = cafeDemand(gd, s);
-  const goodsDemandList = goodsDemand(gd, s);
+  const cafeDemandList = cafeDemand(gd, s);
+  const reserved = reservationDemand(gd, s);
+  const foodDemand = mergeQty([...cafeDemandList, ...reserved.food]);
+  const goodsDemandList = mergeQty([...goodsDemand(gd, s), ...reserved.goods]);
   const shared = sharedItems(gd);
 
   // Requirement pass: how much of each shared item each pipeline would use, then split and expand for real.
@@ -258,11 +381,13 @@ export function buildPlan(gd: GameData, s: State, now: Date): Plan {
   const expansions = { food: expandDemand(gd, foodDemand, alloc.food), goods: expandDemand(gd, goodsDemandList, alloc.goods) };
 
   const budget = new Budget(alloc, shared);
+  const onHand = new Budget(allocate(onHandStock(s), foodReq, goodsReq, priority, shared), shared);
   const rankedGoods = rankGoods(gd, budget);
   const remaining = new Map<PlanStep, number>([...expansions.food.steps, ...expansions.goods.steps].map(st => [st, st.runs]));
+  const { pending, pendingUsed } = pendingOutputs(s, gd);
   const ctx: Ctx = {
-    gd, free, foodDemand, goodsDemandList, topRecipes: topFactoryRecipes(gd).map(t => t.recipe),
-    expansions, remaining, budget,
+    gd, free, cafeDemandList, goodsDemandList, reserved, reservedReasons: reservationReasons(gd, s),
+    topRecipes: topFactoryRecipes(gd).map(t => t.recipe), expansions, remaining, budget, onHand, pending, pendingUsed,
   };
 
   const idle: IdleSlots = new Map(Object.values(gd.buildings).filter(b => b.active).map(b => [b.id, idleSlots(s, b, now)]));

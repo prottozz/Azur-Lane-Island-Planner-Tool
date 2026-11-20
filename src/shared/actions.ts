@@ -73,12 +73,14 @@ export function finishJob(s: State, gd: GameData, jobId: string): Result<State> 
   return ok({ ...s, stock: withStock(s.stock, jobOutputs(recipe, job.runs)), jobs: s.jobs.filter(j => j.id !== jobId) });
 }
 
+/** Removes the job and refunds its inputs; a job whose recipe no longer exists is removed without a refund. */
 export function cancelJob(s: State, gd: GameData, jobId: string): Result<State> {
   const job = s.jobs.find(j => j.id === jobId);
   if (!job) return err('Job not found');
   const recipe = gd.recipes[job.recipeId];
-  if (!recipe) return err(`Unknown recipe "${job.recipeId}"`);
-  return ok({ ...s, stock: withStock(s.stock, jobInputs(recipe, job.runs)), jobs: s.jobs.filter(j => j.id !== jobId) });
+  const jobs = s.jobs.filter(j => j.id !== jobId);
+  if (!recipe) return ok({ ...s, jobs });
+  return ok({ ...s, stock: withStock(s.stock, jobInputs(recipe, job.runs)), jobs });
 }
 
 export function readyJobs(s: State, now: Date): Job[] {
@@ -112,12 +114,17 @@ export function startCafeRun(s: State, gd: GameData, a: { cafeId: string; dishes
 }
 
 export function finishCafeRun(
-  s: State, _gd: GameData, a: { runId: string; leftovers: Qty[]; income: number | null },
+  s: State, gd: GameData, a: { runId: string; leftovers: Qty[]; income: number | null },
 ): Result<State> {
   const run = s.cafeRuns.find(r => r.id === a.runId);
   if (!run) return err('Café run not found');
   if (run.status !== 'running') return err('Café run is already finished');
   if (!validQtys(a.leftovers)) return err('Leftover quantities must be whole numbers, zero or more');
+  const sent = new Map(run.dishes.map(d => [d.item, d.qty]));
+  for (const q of mergeQty(a.leftovers)) {
+    const max = sent.get(q.item) ?? 0;
+    if (q.qty > max) return err(`Leftover ${gd.items[q.item]?.name ?? q.item} (${q.qty}) is more than the ${max} sent in this run`);
+  }
   if (a.income !== null && (!Number.isFinite(a.income) || a.income < 0)) return err('Income must be zero or more');
   const money = a.income !== null && s.settings.money !== null ? s.settings.money + a.income : s.settings.money;
   const done: CafeRun = { ...run, status: 'done', leftovers: mergeQty(a.leftovers), income: a.income };

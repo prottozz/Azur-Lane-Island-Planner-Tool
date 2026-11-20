@@ -73,6 +73,13 @@ describe('jobs', () => {
     expect(c.jobs).toEqual([]);
     expect(cancelJob(n, gd, 'missing').ok).toBe(false);
   });
+  it('cancelling a job whose recipe no longer exists removes it without a refund', () => {
+    const n = must(start(base()));
+    const { wheat: _gone, ...recipes } = gd.recipes;
+    const c = must(cancelJob(n, { ...gd, recipes }, n.jobs[0].id));
+    expect(c.jobs).toEqual([]);
+    expect(c.stock).toEqual(n.stock);
+  });
   it('readyJobs returns jobs whose endsAt has passed', () => {
     const n = must(start(base(), { runs: 1 }));
     expect(readyJobs(n, now)).toEqual([]);
@@ -124,6 +131,15 @@ describe('cafe runs', () => {
     expect(f.cafeRuns[0]).toMatchObject({ status: 'done', income: 50, leftovers: [{ item: '3011', qty: 2 }] });
     expect(n).toEqual(snap);
     expect(finishCafeRun(f, gd, { runId: n.cafeRuns[0].id, leftovers: [], income: null }).ok).toBe(false);
+  });
+  it('finish rejects leftovers above the qty sent in the run, or for dishes not in it', () => {
+    const n = must(run(s0()));
+    const sent = n.cafeRuns[0].dishes.find(d => d.item === '3011')!.qty;
+    const over = finishCafeRun(n, gd, { runId: n.cafeRuns[0].id, leftovers: [{ item: '3011', qty: sent + 1 }], income: null });
+    expect(over).toMatchObject({ ok: false });
+    expect((over as { error: string }).error).toMatch(new RegExp(`more than the ${sent} sent`));
+    expect(finishCafeRun(n, gd, { runId: n.cafeRuns[0].id, leftovers: [{ item: 'tofu', qty: 1 }], income: null }).ok).toBe(false);
+    expect(finishCafeRun(n, gd, { runId: n.cafeRuns[0].id, leftovers: [{ item: '3011', qty: sent }], income: null }).ok).toBe(true);
   });
   it('finish leaves money null when untracked', () => {
     const n = must(run(s0()));
